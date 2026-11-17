@@ -38,6 +38,7 @@ export default function Files() {
   const [shareFor, setShareFor] = useState(null);
   const [qrFor, setQrFor] = useState(null);
   const [deleteFor, setDeleteFor] = useState(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
   const inputRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -139,11 +140,21 @@ export default function Files() {
 
   const totalBytes = useMemo(() => (files || []).reduce((n, f) => n + (Number(f.size) || 0), 0), [files]);
   const openPicker = () => inputRef.current?.click();
+  const openUpload = () => setUploadOpen(true);
+
+  // Successful uploads leave the tray on their own a few seconds after the
+  // last one finishes; failed ones stay until dismissed so they aren't missed.
+  useEffect(() => {
+    const busy = uploads.some((u) => u.status === 'uploading');
+    if (busy || !uploads.some((u) => u.status === 'done')) return undefined;
+    const t = setTimeout(() => setUploads((u) => u.filter((x) => x.status !== 'done')), 4000);
+    return () => clearTimeout(t);
+  }, [uploads]);
 
   return (
     <div>
       <input ref={inputRef} type="file" multiple className="hidden"
-        onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }} />
+        onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; setUploadOpen(false); }} />
 
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -160,7 +171,7 @@ export default function Files() {
           <button onClick={load} className="btn-secondary w-9 px-0" disabled={loading} title="Refresh" aria-label="Refresh">
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button onClick={openPicker} className="btn-primary">
+          <button onClick={openUpload} className="btn-primary">
             <Upload className="h-4 w-4" /> Upload
           </button>
         </div>
@@ -193,7 +204,7 @@ export default function Files() {
             </div>
             <h2 className="mt-4 text-[15px] font-semibold">No files yet</h2>
             <p className="mt-1 max-w-xs text-sm text-muted">Drag files anywhere onto this page, or choose them from your computer.</p>
-            <button onClick={openPicker} className="btn-primary mt-5"><Upload className="h-4 w-4" /> Upload files</button>
+            <button onClick={openUpload} className="btn-primary mt-5"><Upload className="h-4 w-4" /> Upload files</button>
           </div>
         )}
 
@@ -212,7 +223,7 @@ export default function Files() {
         )}
       </div>
 
-      {dragging && (
+      {dragging && !uploadOpen && (
         <div className="pointer-events-none fixed inset-0 z-40 grid place-items-center bg-canvas/80 p-6">
           <div className="grid h-full w-full place-items-center rounded-xl border-2 border-dashed border-accent bg-accent-soft">
             <div className="text-center">
@@ -225,6 +236,12 @@ export default function Files() {
       )}
 
       {uploads.length > 0 && <UploadTray uploads={uploads} onClear={() => setUploads((u) => u.filter((x) => x.status === 'uploading'))} />}
+      {uploadOpen && (
+        <UploadModal
+          onClose={() => setUploadOpen(false)}
+          onChoose={openPicker}
+          onFiles={(list) => { handleFiles(list); setUploadOpen(false); }} />
+      )}
 
       {shareFor && <ShareModal file={shareFor} userId={userId} idToken={idToken} onClose={() => setShareFor(null)} />}
       {qrFor && <QrModal file={qrFor} userId={userId} idToken={idToken} onClose={() => setQrFor(null)} />}
@@ -290,6 +307,39 @@ function SkeletonRows() {
         </div>
       ))}
     </div>
+  );
+}
+
+function UploadModal({ onClose, onChoose, onFiles }) {
+  const [over, setOver] = useState(false);
+  const drop = (e) => {
+    // Stop here so the page-wide drop handler doesn't upload the same files again.
+    e.preventDefault(); e.stopPropagation(); setOver(false);
+    if (e.dataTransfer.files?.length) onFiles(e.dataTransfer.files);
+  };
+  return (
+    <Modal onClose={onClose} title="Upload files" icon={Upload} width="max-w-lg">
+      <div
+        onDragEnter={(e) => { e.preventDefault(); setOver(true); }}
+        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(false); }}
+        onDrop={drop}
+        onClick={onChoose}
+        data-dropzone
+        className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-12 text-center transition-colors ${
+          over ? 'border-accent bg-accent-soft' : 'border-line-strong bg-surface-2 hover:border-accent/60'}`}
+      >
+        <div className={`grid h-11 w-11 place-items-center rounded-lg border ${over ? 'border-accent/40 bg-surface text-accent' : 'border-line bg-surface text-muted'}`}>
+          <ArrowDownToLine className="h-5 w-5" />
+        </div>
+        <p className="mt-4 text-[15px] font-semibold">{over ? 'Drop to upload' : 'Drag files here'}</p>
+        <p className="mt-1 text-sm text-muted">or</p>
+        <button type="button" autoFocus className="btn-secondary mt-3" onClick={(e) => { e.stopPropagation(); onChoose(); }}>
+          Choose files
+        </button>
+        <p className="mt-5 text-xs text-muted">Up to 5 GB per file. You can select several at once.</p>
+      </div>
+    </Modal>
   );
 }
 
