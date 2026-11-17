@@ -1,0 +1,26 @@
+# Dependencies & build output
+node_modules
+dist
+
+# Python
+__pycache__/
+*.pyc
+
+# Terraform (state, cache, packaged lambdas, and YOUR real vars)
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+*.tfstate
+*.tfstate.*
+terraform/build/
+
+# Secrets / local config
+.env
+.env.local
+.env.*.local
+
+.DS_Store
+*.log
+
+# local offline stack
+local/.data/

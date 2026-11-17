@@ -1,0 +1,228 @@
+{
+  "info": {
+    "name": "Enclave",
+    "description": "Enclave \u2014 serverless secure file sharing on AWS.\n\nAuth is KEYLESS: every request carries only `Authorization: Bearer {{IdToken}}` (a CognitoApi id token); the Lambda resolves the caller via the auth service's /v1/userinfo. There is no x-api-key.\n\nUpload flow: (2) Create upload -> PUT bytes to the returned upload_url -> (3) Complete upload.\n\nVariables: API_BASE_URL (Enclave File API base, from `make output`), IdToken (a CognitoApi id token), USER_ID (your Cognito sub), FILE_ID (from Create upload).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. List files",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{IdToken}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files",
+          "host": [
+            "{{API_BASE_URL}}"
+          ],
+          "path": [
+            "v1",
+            "users",
+            "{{USER_ID}}",
+            "files"
+          ]
+        },
+        "description": "List the caller's files. Returns id, name, size, content_type, status, uploaded_at."
+      },
+      "response": []
+    },
+    {
+      "name": "2. Create upload",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{IdToken}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files",
+          "host": [
+            "{{API_BASE_URL}}"
+          ],
+          "path": [
+            "v1",
+            "users",
+            "{{USER_ID}}",
+            "files"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"file_name\": \"report.pdf\",\n  \"content_type\": \"application/pdf\",\n  \"size\": 1048576\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Reserve a file and get a presigned S3 PUT URL.\n201 -> { file_id, upload_url, upload_headers, status:'UPLOADING' }.\nNext: PUT the raw bytes directly to upload_url (with upload_headers), then call '3. Complete upload'. Only file_name is required."
+      },
+      "response": []
+    },
+    {
+      "name": "3. Complete upload",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{IdToken}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}/complete",
+          "host": [
+            "{{API_BASE_URL}}"
+          ],
+          "path": [
+            "v1",
+            "users",
+            "{{USER_ID}}",
+            "files",
+            "{{FILE_ID}}",
+            "complete"
+          ]
+        },
+        "description": "Finalize the upload after the browser/client has PUT the bytes to upload_url. No body.\n200 -> { file_id, size, status:'READY' }."
+      },
+      "response": []
+    },
+    {
+      "name": "4. Download file",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{IdToken}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}/download",
+          "host": [
+            "{{API_BASE_URL}}"
+          ],
+          "path": [
+            "v1",
+            "users",
+            "{{USER_ID}}",
+            "files",
+            "{{FILE_ID}}",
+            "download"
+          ]
+        },
+        "description": "Get a short-lived (1 h) presigned GET URL for the file.\n200 -> { file_id, file_name, download_url }."
+      },
+      "response": []
+    },
+    {
+      "name": "5. Share file",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{IdToken}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}/share",
+          "host": [
+            "{{API_BASE_URL}}"
+          ],
+          "path": [
+            "v1",
+            "users",
+            "{{USER_ID}}",
+            "files",
+            "{{FILE_ID}}",
+            "share"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"share_with\": [\n    \"user@example.com\"\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Email an expiring presigned link to one or more recipients via SES. 'share_with' is required."
+      },
+      "response": []
+    },
+    {
+      "name": "6. Delete file",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{IdToken}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}",
+          "host": [
+            "{{API_BASE_URL}}"
+          ],
+          "path": [
+            "v1",
+            "users",
+            "{{USER_ID}}",
+            "files",
+            "{{FILE_ID}}"
+          ]
+        },
+        "description": "Delete the file (S3 object + metadata). Owner only."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "API_BASE_URL",
+      "value": "https://your-enclave-api.example.com",
+      "type": "string"
+    },
+    {
+      "key": "IdToken",
+      "value": "<paste a CognitoApi id_token>",
+      "type": "string"
+    },
+    {
+      "key": "USER_ID",
+      "value": "<your Cognito user sub>",
+      "type": "string"
+    },
+    {
+      "key": "FILE_ID",
+      "value": "<file_id from Create upload>",
+      "type": "string"
+    }
+  ]
+}

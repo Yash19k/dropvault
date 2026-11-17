@@ -1,0 +1,43 @@
+# Copy to terraform.tfvars and fill in. deploy.sh (and `make apply`) read terraform.tfvars.
+
+aws_region  = "ap-south-1"
+aws_profile = "" # e.g. "my-aws-profile"; empty = default credential chain
+
+app_name    = "enclave"
+environment = "dev"
+
+# --- Auth ---
+# Empty = built-in simple email+password auth service (auth.tf) on the same API.
+# Or set the base URL of an external auth microservice (e.g. CognitoApi).
+auth_endpoint = ""
+
+# --- Email sharing (Amazon SES) ---
+# Share emails are sent FROM this address. AWS emails it a verification link on
+# first deploy - click it. New accounts are in the SES sandbox (can only send to
+# verified addresses) until you request production access.
+sender_email = "you@example.com"
+# sender_ses_arn = ""   # optional: an already-verified SES identity ARN
+
+# --- Storage (optional; default bucket name is <app>-<env>-files-<account id>) ---
+# files_bucket_name = "my-globally-unique-bucket"
+# table_name        = "enclave-files-dev"
+
+# --- Web hosting: "amplify" (works on new accounts) or "cloudfront"
+#     (new AWS accounts must be verified by AWS Support before using CloudFront)
+web_hosting = "amplify"
+
+# --- Extra origins allowed to upload/download directly to S3 (the hosted app is always allowed)
+allowed_origins = ["http://localhost:3001"]
+
+# --- Custom API domain (optional; Enclave creates its OWN ACM cert in this zone) ---
+api_domain_name = "" # e.g. "files.example.com"; empty = default execute-api URL
+route53_zone_id = "" # required when api_domain_name is set
+
+# --- Encryption: 's3' (free), 'shared' (one KMS key), or 'per_user' (~$1/user/mo) ---
+kms_mode = "s3"
+
+# --- Build tooling ---
+# Linux/macOS defaults: bash_bin = "/bin/bash", python_bin = "python3"
+# Windows (Git Bash):
+# bash_bin   = "C:/Program Files/Git/bin/bash.exe"
+# python_bin = "python"

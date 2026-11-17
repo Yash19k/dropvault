@@ -1,0 +1,13 @@
+# Offline AWS for Enclave: S3, DynamoDB, KMS and SES emulated by LocalStack.
+services:
+  localstack:
+    image: localstack/localstack:4.4
+    container_name: enclave-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3,dynamodb,kms,ses
+      - AWS_DEFAULT_REGION=eu-west-1
+      - PERSISTENCE=0
+      # the web app (vite dev / preview) uploads & downloads directly from the browser
+      - EXTRA_CORS_ALLOWED_ORIGINS=http://localhost:3001,http://127.0.0.1:3001,http://localhost:4173
