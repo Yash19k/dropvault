@@ -222,13 +222,6 @@ about $1 per user per month.
 - [ ] Custom link lifetimes
 - [ ] Custom domain for the web app
 
-## Credits
-
-DropVault started from [Enclave](https://github.com/TocConsulting/enclave) by Tarek Cheikh
-([TocConsulting](https://github.com/TocConsulting)), released under the MIT license. The S3, DynamoDB,
-KMS and file-sharing Lambdas come from that project. DropVault adds the built-in auth service, QR links,
-web hosting and deploy script, the offline LocalStack stack, and a redesigned front end.
-
 ## License
 
 MIT. See [LICENSE](./LICENSE).
