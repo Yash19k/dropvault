@@ -13,7 +13,7 @@ function RequireAuth({ children }) {
   // An expired session is being renewed: wait instead of calling the API with a dead token.
   if (renewing) {
     return (
-      <div className="grid min-h-screen place-items-center text-sm text-slate-400">
+      <div className="grid min-h-screen place-items-center text-sm text-muted">
         <span className="flex items-center gap-2"><Spinner /> Restoring your session…</span>
       </div>
     );

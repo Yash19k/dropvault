@@ -1,201 +1,234 @@
+<h1 align="center">DropVault</h1>
+
 <p align="center">
-  <img src="assets/enclave-logo.png" alt="Enclave" width="460" />
+  Share files with links that expire. Serverless on AWS: upload up to 5 GB, share by email or QR code,
+  and every link stops working after an hour.
 </p>
 
-<h1 align="center">DropVault — Secure File Sharing on AWS</h1>
+<p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-0e6b5e" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/AWS-Lambda%20%C2%B7%20S3%20%C2%B7%20DynamoDB-0e6b5e" alt="AWS">
+  <img src="https://img.shields.io/badge/IaC-Terraform-0e6b5e" alt="Terraform">
+  <img src="https://img.shields.io/badge/web-React%2019%20%C2%B7%20Vite%20%C2%B7%20Tailwind%204-0e6b5e" alt="React">
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![AWS](https://img.shields.io/badge/AWS-Serverless-orange)](https://aws.amazon.com/)
-[![Python](https://img.shields.io/badge/Python-3.13-blue)](https://www.python.org/)
-[![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+<p align="center">
+  <img src="assets/screenshots/files-light.png" alt="DropVault file list" width="860">
+</p>
 
-> Serverless file sharing on AWS: direct-to-S3 uploads (up to 5 GB per file), short-lived presigned
-> downloads, email sharing with expiring links, **scan-to-download QR codes**, **optional per-user
-> KMS encryption**, and a sleek React front end.
+## Features
 
-> **Credits:** DropVault is built on [Enclave](https://github.com/TocConsulting/enclave) by
-> TocConsulting (MIT license, see [LICENSE](./LICENSE)). The app UI still uses the Enclave name.
+- **Direct-to-S3 uploads** up to 5 GB per file. The browser uploads straight to S3 with a presigned URL,
+  with live progress. Nothing large passes through a server.
+- **Expiring links.** Downloads use presigned URLs that work for 1 hour.
+- **Share by email.** Send a file to several people; each gets an email with a download link (Amazon SES).
+- **QR codes.** Every file has a short, scannable link that redirects to a fresh download and stops
+  working after 1 hour, or as soon as the file is deleted.
+- **Simple accounts.** Name, email and password. Sessions renew automatically for up to 30 days.
+- **Light and dark mode**, following your system setting or chosen manually.
+- **Encryption at rest:** SSE-S3 by default, or one KMS key for the app, or one KMS key **per user**.
+- **One-command deploy** with Terraform, and a **fully offline mode** using LocalStack.
 
-## ✨ What DropVault adds
-
-- **Built-in simple auth** - email + password sign-up and sign-in served by its own Lambda
-  ([`endpoints/auth-service`](./endpoints/auth-service)) on the same API, with automatic session
-  renewal. No separate auth microservice to deploy (an external one can still be used via `auth_endpoint`).
-- **QR codes** - a QR button on every file opens a scannable code; short links
-  ([`endpoints/qr-link`](./endpoints/qr-link)) redirect to a fresh download and stop working after
-  1 hour or when the file is deleted.
-- **Web hosting in Terraform** - AWS Amplify Hosting (works on new AWS accounts) or S3 + CloudFront,
-  plus a one-command [`terraform/deploy.sh`](./terraform/deploy.sh) that deploys infra, builds the app
-  and publishes it.
-- **Fully offline mode** - [`local/`](./local) runs everything on your machine with LocalStack
-  (S3, DynamoDB, KMS, SES in Docker) and the real Lambda handlers. See [local/README.md](./local/README.md).
-- **UI polish** - in-app delete confirmation, 5 GB upload guard, layout fixes. Windows-friendly build scripts.
-
-### Quick deploy
-
-```bash
-cd terraform
-cp terraform.tfvars.example terraform.tfvars   # set aws_region, sender_email (+ bash_bin/python_bin on Windows)
-bash deploy.sh                                 # terraform apply + build web app + publish
-```
-
-AWS emails `sender_email` a verification link on first deploy - click it to enable sharing by email.
-
----
-
-*The original Enclave documentation follows. Where it mentions CognitoApi / MFA sign-up, DropVault
-uses the built-in simple auth described above instead.*
-
-## 🎯 Key features
-
-- **🔌 Microservice-decoupled auth** - Enclave validates and resolves the caller by calling the auth
-  service's `/v1/userinfo`. No identity store, SDK, or infrastructure is shared; the only auth config
-  is just an **endpoint**.
-- **⬆️ Direct-to-S3 uploads** - the browser PUTs straight to S3 against a presigned URL (up to 5 GB per file,
-  real progress) using SigV4 on the regional endpoint.
-- **⬇️ Owner downloads & email sharing** - short-lived (1 hour) presigned links; share to anyone by email via SES.
-- **🔐 Optional per-user KMS encryption** - `kms_mode` of `s3` (free), `shared` (one customer key), or
-  `per_user` (one KMS key **per user** - true cryptographic isolation).
-- **🗂️ Rich metadata** - name, size, content type, upload date and status in DynamoDB.
-- **🧱 One-command IaC** - `make apply` builds + deploys everything; `make destroy` removes it all,
-  including the runtime KMS keys and every stored object. No orphans.
-- **🖥️ Modern front end** - dark, brand-matched React 19 + Vite + Tailwind app (sign-up, MFA login, dashboard).
-
-## 🏛️ Architecture
-
-```
-Browser ── presigned PUT (SigV4) ─────────▶  S3 (private, optional SSE-KMS)
-   │                                            ▲
-   │  REST (Bearer IdToken)                     │ presigned GET (download / share)
-   ▼                                            │
-API Gateway ──▶ Lambda (Python) ──▶ DynamoDB (file metadata + per-user key lock)
-                     │   │
-                     │   └──▶ KMS  (per-user key, created once via a DynamoDB lock)
-                     │
-                     ├──▶ Auth microservice  /v1/userinfo   (validate token, resolve user)
-                     └──▶ SES                                 (share emails)
-```
-
-The API methods are **open** (no API key); the bearer token is validated **in the Lambda** by calling the
-auth service - there is no Cognito authorizer, so Enclave is independent of the auth implementation.
-
-## 📚 API reference
-
-All endpoints require `Authorization: Bearer {IdToken}`. The Lambda resolves `user_id`
-from the auth service and enforces that the path user matches the token.
-
-| Action | Request | Response |
-| --- | --- | --- |
-| **Create upload** | `POST /v1/users/{user_id}/files`<br>`{file_name, content_type, size}` | `{file_id, upload_url, upload_headers, status:"UPLOADING"}` |
-| **(browser)** | `PUT {upload_url}` with the bytes + `Content-Type` (+ `upload_headers` for SSE-KMS) | S3 stores the object |
-| **Complete upload** | `POST /v1/users/{user_id}/files/{file_id}/complete` | `{file_id, size, status:"READY"}` |
-| **List files** | `GET /v1/users/{user_id}/files` | `{user_id, user_files:[{file_id, file_name, content_type, size, uploaded_at, status}]}` |
-| **Download** | `GET /v1/users/{user_id}/files/{file_id}/download` | `{file_id, file_name, download_url}` (1 h) |
-| **Share** | `POST /v1/users/{user_id}/files/{file_id}/share`<br>`{share_with:[emails]}` | `{file_id, file_name, status:"SHARED"}` + emails a 1 h link |
-| **Delete** | `DELETE /v1/users/{user_id}/files/{file_id}` | `{file_id, file_name, file_status:"DELETED"}` |
-
-Objects are stored under the key `{user_id}/{file_id}/{file_name}`.
-
-## ☁️ Deploy the backend (Terraform, one command)
-
-Provisions the S3 bucket (+ CORS), DynamoDB, the **6 Python Lambdas** + dependency layer, API Gateway
-(routes), IAM, KMS (per `kms_mode`), and an optional custom domain - all from
-[`terraform/`](./terraform). Terraform packages the Lambdas itself (no manual build step).
-
-**Prerequisites:** Terraform ≥ 1.5, AWS CLI configured, Python 3 + `pip` + `zip`, a running **auth
-microservice**, and a **verified SES identity** for the sender address.
-
-```bash
-cd terraform
-cp terraform.tfvars.example terraform.tfvars   # then fill in the values
-make apply        # builds lambdas + layers, deploys everything
-make output       # api_url, bucket, table
-```
-
-Key `terraform.tfvars` values:
-
-| Variable | Purpose |
+| Light | Dark |
 | --- | --- |
-| `auth_endpoint` | the auth microservice this API delegates token validation to |
-| `files_bucket_name` | globally-unique S3 bucket |
-| `sender_email`, `sender_ses_arn` | verified SES identity for share emails |
-| `allowed_origins` | frontend origins allowed to upload/download directly to S3 |
-| `kms_mode` | `s3` \| `shared` \| `per_user` (see below) |
-| `api_domain_name`, `route53_zone_id` | optional custom domain (Enclave issues its **own** ACM cert) |
+| <img src="assets/screenshots/landing.png" alt="Landing page"> | <img src="assets/screenshots/files-dark.png" alt="Files in dark mode"> |
+| <img src="assets/screenshots/qr-dark.png" alt="QR code popup"> | <img src="assets/screenshots/mobile.png" alt="Mobile layout" width="260"> |
 
-`make destroy` tears everything down — including the **per-user KMS keys created at runtime** (a
-destroy-time hook deletes their aliases and schedules the keys for deletion) and **all stored objects**
-(`force_destroy`). Nothing is left orphaned. (KMS enforces a 7-day minimum deletion window; keys are
-disabled immediately, so no further access or billing.)
+## Architecture
 
-## 🔐 Encryption modes (`kms_mode`)
+```
+                        ┌──────────────────────────┐
+  Browser ──────────────► Amplify Hosting          │  React app (static)
+     │                  └──────────────────────────┘
+     │ REST, Bearer token
+     ▼
+  API Gateway (REST) ───► Lambda: auth-service ─────► DynamoDB: users
+     │                    (sign-up, login, userinfo, refresh)
+     │
+     ├──────────────────► Lambda: upload, complete, list, download, share, delete
+     │                        │  validates the token via  /v1/userinfo
+     │                        ├──► DynamoDB: files (metadata, QR link records)
+     │                        ├──► S3 (private bucket, SSE-S3 or SSE-KMS)
+     │                        ├──► KMS (optional per-user keys)
+     │                        └──► SES (share emails)
+     │
+     └──────────────────► Lambda: qr-link  ── GET /v1/d/{code} → 302 to a fresh S3 download
 
-| Mode | What it does | Cost |
-| --- | --- | --- |
-| `s3` (default) | SSE-S3 (AES-256) | free |
-| `shared` | one customer-managed KMS key, set as the bucket default | ~$1/mo + requests |
-| `per_user` | **one KMS key per user**, created on first upload and reused thereafter | ~$1/user/mo + requests |
+  Browser ── presigned PUT / GET ──► S3        (file bytes never go through Lambda)
+```
 
-In `per_user` mode each user's objects are encrypted under **their own** key, so one user's data can
-never be decrypted with another's. The key is created **exactly once per user**, guarded by an atomic
-DynamoDB conditional write (no races, no orphaned keys), and the browser PUT carries the SSE-KMS headers
-returned in `upload_headers`.
+The file Lambdas don't know how authentication works. They only call `{AUTH_ENDPOINT}/v1/userinfo`
+with the caller's token. By default that's the built-in `auth-service` on the same API, but you can point
+`auth_endpoint` at any compatible auth service.
 
-## 🖥️ The web app (`web/`)
+## Project structure
 
-A standalone, deployable product (not a demo): a dark, brand-matched React app - landing page,
-**sign-up** (create account → email confirmation → mandatory TOTP MFA) and **sign-in**, then a dashboard
-with drag-and-drop uploads (live progress), a type-aware file library with search/sort, and
-Download / Share / Copy-link / Delete.
+```
+.
+├── endpoints/                 Python 3.13 Lambda handlers (one folder per function)
+│   ├── auth-service/          sign-up, sign-in, userinfo, refresh (PBKDF2 passwords, HMAC tokens)
+│   ├── upload-file/           create a file record + presigned PUT URL (optional per-user KMS key)
+│   ├── complete-upload/       mark an upload READY and record its real size
+│   ├── get-user-files/        list the caller's files
+│   ├── download-file/         presigned GET URL (1 hour)
+│   ├── share-file/            email a download link via SES
+│   ├── delete-user-file/      delete the S3 object and its record
+│   └── qr-link/               short links for QR codes + the public redirect
+├── terraform/                 all AWS infrastructure
+│   ├── deploy.sh              terraform apply → build web app → publish to Amplify / S3
+│   ├── auth.tf  qr.tf         the auth and QR Lambdas, their routes and the users table
+│   ├── apigateway.tf          REST API, routes, CORS
+│   ├── lambda.tf  layers.tf   file Lambdas + the jsonschema layer
+│   ├── s3.tf  dynamodb.tf     storage, CORS, TTL for link records
+│   ├── kms.tf  ses.tf         encryption modes, sender email identity
+│   ├── web.tf                 Amplify Hosting or S3 + CloudFront
+│   └── terraform.tfvars.example
+├── web/                       React 19 + Vite + Tailwind CSS 4 front end
+│   └── src/
+│       ├── pages/             Landing, Login, SignUp, dashboard/Files, dashboard/DashboardLayout
+│       ├── components/        UI primitives, toasts, auth layout
+│       ├── context/           AuthContext (session + automatic token renewal)
+│       ├── api/               auth and file API clients
+│       └── theme.jsx          light / dark / system theme
+├── local/                     offline stack: LocalStack + a local API server running the real Lambdas
+└── postman/                   API collection (sign up → upload → share → QR → delete)
+```
 
-It's an **independent microservice client**: its dependencies (the auth service and the Enclave File API)
-are wired in at **build time** via env vars - there is no runtime "connect your API" step.
+## Getting started
+
+### Option 1: run it offline (no AWS account)
+
+Needs Docker Desktop, Python 3 (`pip install boto3 jsonschema`) and Node 20+.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File local\start.ps1
+```
+
+This starts LocalStack (S3, DynamoDB, KMS, SES in Docker), a local API on `http://localhost:4000` that runs
+the real Lambda handlers, and the web app on `http://localhost:3001`. Emails are captured, not sent; read
+them at `http://localhost:4566/_aws/ses`. Details in [local/README.md](./local/README.md).
+
+### Option 2: deploy to AWS
+
+Needs Terraform ≥ 1.5, the AWS CLI with credentials (`aws configure`), Python 3, Node 20+ and bash
+(Git Bash on Windows).
 
 ```bash
-cd web
-npm install
-cp .env.example .env.local      # fill in your endpoints
-npm run dev                     # http://localhost:3001  (landing -> sign up / sign in -> app)
+cd terraform
+cp terraform.tfvars.example terraform.tfvars   # set aws_region and sender_email
+bash deploy.sh
 ```
 
-Configuration (set before `npm run build`, e.g. in CI):
+`deploy.sh` runs `terraform apply`, builds the web app with the new API URL baked in, publishes it and
+prints both URLs:
 
 ```
-VITE_AUTH_URL=https://auth.example.com    # auth microservice
-VITE_FILE_URL=https://files.example.com   # Enclave File API (make output); omit if same gateway
+Web app : https://main.<app-id>.amplifyapp.com
+API     : https://<api-id>.execute-api.<region>.amazonaws.com/dev
 ```
 
-### Deploy the app (served at your domain)
+After the first deploy, AWS emails `sender_email` a verification link. Click it, or sharing by email won't work.
 
-`npm run build` produces a static `dist/`. Host it on S3 + CloudFront + ACM + Route53 at your domain
-(e.g. `https://share.example.com`):
+Run `bash deploy.sh` again after any change. To remove everything (S3 objects included):
 
-1. Build with the env vars above baked in.
-2. Upload `dist/` to a private S3 bucket fronted by CloudFront (OAC), with a custom error response
-   `403/404 -> /index.html` (SPA routing) and an ACM cert for the domain.
-3. Point a Route53 alias at the distribution.
-4. Add that domain to the backend `allowed_origins` and re-run `make apply` so S3 CORS permits it.
+```bash
+terraform destroy -var-file=terraform.tfvars
+```
 
-The product name lives in `web/src/brand.js` (one constant).
+### Configuration
 
-## 🔒 Security notes
+The main `terraform.tfvars` settings (see [the example](./terraform/terraform.tfvars.example) for all of them):
 
-- Mandatory MFA on the auth side; the bearer token is validated on every request via the auth service.
-- Files are private; access is only ever granted through short-lived (1 h) presigned URLs.
-- `per_user` KMS gives per-user cryptographic isolation and crypto-shredding (deleting a user's key
-  makes their files unrecoverable).
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `aws_region` | `eu-west-1` | Region for everything |
+| `sender_email` | - | Address share emails come from (verified by SES on first deploy) |
+| `web_hosting` | `amplify` | `amplify`, or `cloudfront` (S3 + CloudFront; new AWS accounts must be verified by AWS Support first) |
+| `kms_mode` | `s3` | `s3` (SSE-S3, free), `shared` (one KMS key), `per_user` (one KMS key per user) |
+| `auth_endpoint` | `""` | Empty = built-in auth service. Or the URL of an external one |
+| `display_name` | `DropVault` | Product name used in share emails |
+| `allowed_origins` | `["http://localhost:3001"]` | Extra origins allowed to upload to S3 (the hosted app is always allowed) |
+| `bash_bin`, `python_bin` | `/bin/bash`, `python3` | On Windows: `C:/Program Files/Git/bin/bash.exe` and `python` |
 
-## 🚧 Roadmap
+## API
 
-- [x] Infrastructure as Code (Terraform) for the whole stack
-- [x] Per-user customer-managed KMS encryption
-- [ ] Multipart uploads for very large files
-- [ ] Share management (revoke links, see who has access)
+All routes are under `/v1`. File routes need `Authorization: Bearer <id_token>`, and the `{user_id}`
+in the path must be the caller's own. A ready-made [Postman collection](./postman/DropVault.postman_collection.json)
+saves the token and IDs for you.
 
-## 📄 License
+**Auth**
 
-MIT - see [LICENSE](./LICENSE).
+| Request | Response |
+| --- | --- |
+| `POST /users` `{full_name, email, password}` | `201 {user_id, email, id_token, access_token, refresh_token, expires_in}` |
+| `POST /login` `{email, password}` | `200 {id_token, access_token, refresh_token, expires_in}` |
+| `GET /userinfo` | `200 {user_id, name, email}` |
+| `POST /refresh-token` `{refresh_token}` | `200` new tokens |
 
-## 👨‍💻 Author
+**Files**
 
-**Tarek CHEIKH** - [@TocConsulting](https://github.com/TocConsulting) · [tocconsulting.fr](https://tocconsulting.fr)
+| Request | Response |
+| --- | --- |
+| `GET /users/{user_id}/files` | `{user_files: [{file_id, file_name, content_type, size, uploaded_at, status}]}` |
+| `POST /users/{user_id}/files` `{file_name, content_type, size}` | `201 {file_id, upload_url, upload_headers}` |
+| `PUT {upload_url}` (straight to S3) | the file bytes, same `Content-Type`, plus `upload_headers` |
+| `POST /users/{user_id}/files/{file_id}/complete` | `{file_id, size, status: "READY"}` |
+| `GET /users/{user_id}/files/{file_id}/download` | `{download_url}` (1 hour) |
+| `POST /users/{user_id}/files/{file_id}/share` `{share_with: [emails]}` | `201`, emails a 1-hour link |
+| `POST /users/{user_id}/files/{file_id}/qr` | `201 {short_url, expires_at}` |
+| `GET /d/{code}` (public) | `302` to a fresh download, or a "link expired" page |
+| `DELETE /users/{user_id}/files/{file_id}` | `{file_status: "DELETED"}` |
+
+Files are stored at `s3://<bucket>/{user_id}/{file_id}/{file_name}`.
+
+## How it works
+
+**Accounts and sessions.** Passwords are hashed with PBKDF2-SHA256 (200,000 rounds). Tokens are
+HMAC-SHA256 signed and carry their own expiry, so the server stores no sessions. ID and access tokens last
+1 hour and refresh tokens 30 days. The web app renews tokens a minute before they expire, and again when
+a tab wakes from sleep.
+
+**Uploads.** The app asks the API for a presigned PUT URL, uploads the file straight to S3 with progress,
+then marks it complete. S3 accepts up to 5 GB in a single PUT, and the app checks this before uploading.
+
+**QR links.** A presigned S3 URL is about 1,500 characters, which makes a QR code too dense to scan
+reliably. `qr-link` stores a 12-character code in DynamoDB instead, so the QR holds a ~80-character link.
+Each scan gets a fresh 5-minute download URL. DynamoDB TTL deletes expired link records.
+
+**Encryption (`kms_mode`).** `s3` uses SSE-S3 (AES-256, free). `shared` sets one customer-managed KMS
+key as the bucket default (about $1/month). `per_user` creates one KMS key per user on their first
+upload (about $1/user/month), so one user's files can't be decrypted with another user's key. Key
+creation uses a DynamoDB conditional write as a lock, so each user gets exactly one key.
+
+## Cost
+
+At personal or demo scale this runs for about **$0 to $1 a month**. Lambda, API Gateway and DynamoDB
+on-demand are pay-per-request with free tiers, and S3 costs about $0.025 per GB-month. `per_user` KMS adds
+about $1 per user per month.
+
+## Security notes
+
+- Every bucket is private. Files are only ever reached through presigned URLs that expire.
+- File routes check the token on every request and require the path `user_id` to match it.
+- Sign-up is intentionally simple: there's no email verification, MFA or rate limiting on login.
+  For production use, add those or point `auth_endpoint` at a managed auth service.
+- New AWS accounts start in the **SES sandbox**, which only sends to verified addresses. Request
+  production access in the SES console to email anyone.
+
+## Roadmap
+
+- [ ] Multipart uploads (files over 5 GB, resumable uploads)
+- [ ] Revoke a shared link before it expires
+- [ ] Custom link lifetimes
+- [ ] Custom domain for the web app
+
+## Credits
+
+DropVault started from [Enclave](https://github.com/TocConsulting/enclave) by Tarek Cheikh
+([TocConsulting](https://github.com/TocConsulting)), released under the MIT license. The S3, DynamoDB,
+KMS and file-sharing Lambdas come from that project. DropVault adds the built-in auth service, QR links,
+web hosting and deploy script, the offline LocalStack stack, and a redesigned front end.
+
+## License
+
+MIT. See [LICENSE](./LICENSE).

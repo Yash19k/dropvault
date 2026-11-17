@@ -1,4 +1,4 @@
-# Offline AWS for Enclave: S3, DynamoDB, KMS and SES emulated by LocalStack.
+# Offline AWS for DropVault: S3, DynamoDB, KMS and SES emulated by LocalStack.
 services:
   localstack:
     image: localstack/localstack:4.4

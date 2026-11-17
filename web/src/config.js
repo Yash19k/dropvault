@@ -1,4 +1,4 @@
-// Enclave is configured at BUILD/DEPLOY time, like any microservice that depends
+// DropVault is configured at BUILD/DEPLOY time, like any microservice that depends
 // on another. Its dependencies are wired in via Vite env vars (set before
 // `npm run build`), NOT at runtime by the end user:
 //   - Auth API    (auth: sign-up, login, userinfo)      -> VITE_AUTH_URL

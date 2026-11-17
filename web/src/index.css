@@ -1,46 +1,120 @@
 @import "tailwindcss";
 
-/* Brand tokens (Tailwind v4 @theme) - matched to CognitoApi */
-@theme {
-  --color-brand-50: #eef2ff;
-  --color-brand-100: #e0e7ff;
-  --color-brand-300: #a5b4fc;
-  --color-brand-400: #818cf8;
-  --color-brand-500: #6366f1;
-  --color-brand-600: #4f46e5;
-  --color-brand-700: #4338ca;
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+/* `dark:` variant follows the data-theme attribute set by theme.jsx / index.html */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/* ---- Design tokens -------------------------------------------------------
+   Warm neutrals + one restrained accent. Every color in the UI comes from
+   these, so light and dark stay in step. */
+:root {
+  --canvas: #f7f7f5;
+  --surface: #ffffff;
+  --surface-2: #f1f1ee;
+  --line: #e5e5e0;
+  --line-strong: #d3d3cc;
+  --fg: #1b1b18;
+  --fg-muted: #5c5c55;
+  --fg-subtle: #8b8b83;
+  --accent: #0e6b5e;
+  --accent-hover: #0b594e;
+  --accent-soft: #e4f0ec;
+  --accent-fg: #ffffff;
+  --danger: #b42318;
+  --danger-hover: #931a10;
+  --danger-soft: #fcebe9;
+  --danger-fg: #ffffff;
+  --ring: rgb(14 107 94 / 0.25);
+  --shadow-color: 24 24 20;
+  color-scheme: light;
 }
 
-html { color-scheme: dark; scroll-behavior: smooth; }
-
-body {
-  @apply bg-slate-950 text-slate-200 antialiased font-sans;
-  background-image:
-    radial-gradient(60rem 60rem at 110% -10%, rgba(99, 102, 241, 0.12), transparent 60%),
-    radial-gradient(50rem 50rem at -10% 110%, rgba(56, 189, 248, 0.10), transparent 55%);
-  background-attachment: fixed;
+[data-theme="dark"] {
+  --canvas: #0e0e0d;
+  --surface: #161615;
+  --surface-2: #1d1d1b;
+  --line: #2a2a27;
+  --line-strong: #3a3a36;
+  --fg: #ededea;
+  --fg-muted: #a5a59d;
+  --fg-subtle: #74746d;
+  --accent: #42b8a2;
+  --accent-hover: #5fc9b5;
+  --accent-soft: rgb(66 184 162 / 0.12);
+  --accent-fg: #052520;
+  --danger: #f2705f;
+  --danger-hover: #f68c7e;
+  --danger-soft: rgb(242 112 95 / 0.12);
+  --danger-fg: #2a0905;
+  --ring: rgb(66 184 162 / 0.35);
+  --shadow-color: 0 0 0;
+  color-scheme: dark;
 }
 
-* { scrollbar-width: thin; scrollbar-color: #334155 transparent; }
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--fg-muted);
+  --color-subtle: var(--fg-subtle);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+  --color-danger: var(--danger);
+  --color-danger-hover: var(--danger-hover);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-fg: var(--danger-fg);
+  --color-ring: var(--ring);
+
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --shadow-xs: 0 1px 2px rgb(var(--shadow-color) / 0.06);
+  --shadow-sm: 0 1px 2px rgb(var(--shadow-color) / 0.05), 0 2px 8px -2px rgb(var(--shadow-color) / 0.08);
+  --shadow-lg: 0 2px 4px rgb(var(--shadow-color) / 0.06), 0 16px 40px -12px rgb(var(--shadow-color) / 0.22);
+}
+
+@layer base {
+  html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  body { @apply bg-canvas font-sans text-fg; font-size: 15px; }
+  ::selection { background: var(--accent-soft); }
+  * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+}
 
 /* Component classes live in the `components` layer so utility classes on the
-   same element (e.g. `pl-10` on a search .input) can override them. */
+   same element can override them (e.g. `pl-9` on a search .input). */
 @layer components {
-  .card { @apply rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur; }
+  .panel { @apply rounded-lg border border-line bg-surface; }
 
   .input {
-    @apply w-full rounded-xl border border-white/10 bg-slate-900/60 px-3.5 py-2.5 text-sm text-slate-100
-           placeholder:text-slate-500 outline-none transition
-           focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30;
+    @apply h-10 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-fg
+           outline-none transition-[border-color,box-shadow] placeholder:text-subtle
+           focus:border-accent focus:ring-3 focus:ring-ring;
   }
-  .label { @apply mb-1.5 block text-xs font-medium text-slate-400; }
+  .label { @apply mb-1.5 block text-sm font-medium text-fg; }
+  .hint { @apply mt-1.5 block text-xs text-muted; }
 
-  .btn, .btn-primary, .btn-ghost, .btn-danger {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
-           transition active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-50;
+  .btn-primary, .btn-secondary, .btn-ghost, .btn-danger {
+    @apply inline-flex h-9 items-center justify-center gap-2 rounded-md px-3.5 text-sm font-medium
+           whitespace-nowrap transition-colors select-none
+           focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring
+           disabled:pointer-events-none disabled:opacity-50;
   }
-  .btn-primary { @apply bg-brand-600 text-white hover:bg-brand-500 shadow-lg shadow-brand-600/20; }
-  .btn-ghost { @apply border border-white/10 bg-white/[0.02] text-slate-200 hover:bg-white/[0.06]; }
-  .btn-danger { @apply bg-rose-600 text-white hover:bg-rose-500; }
+  .btn-primary { @apply bg-accent text-accent-fg hover:bg-accent-hover; }
+  .btn-secondary { @apply border border-line-strong bg-surface text-fg shadow-xs hover:bg-surface-2; }
+  .btn-ghost { @apply text-muted hover:bg-surface-2 hover:text-fg; }
+  .btn-danger { @apply bg-danger text-danger-fg hover:bg-danger-hover; }
+
+  .btn-icon, .btn-icon-danger {
+    @apply grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted transition-colors
+           focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring
+           disabled:pointer-events-none disabled:opacity-40;
+  }
+  .btn-icon { @apply hover:bg-line hover:text-fg; }
+  .btn-icon-danger { @apply hover:bg-danger-soft hover:text-danger; }
+
+  .link { @apply font-medium text-accent underline-offset-4 hover:underline; }
 }

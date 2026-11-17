@@ -1,9 +1,9 @@
-# Running Enclave fully offline
+# Running DropVault fully offline
 
 No AWS account needed. LocalStack in Docker emulates S3, DynamoDB, KMS and SES.
 `server.py` runs the **real Lambda handlers** from `../endpoints` (unmodified)
-behind a small API-Gateway-style router, and also acts as a stand-in for the
-CognitoApi auth microservice.
+behind a small API-Gateway-style router, and also serves the same simple
+email + password auth API as the deployed auth-service Lambda.
 
 | Piece | URL |
 | --- | --- |

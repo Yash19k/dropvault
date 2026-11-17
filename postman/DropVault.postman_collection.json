@@ -1,0 +1,455 @@
+{
+  "info": {
+    "name": "DropVault",
+    "description": "DropVault - serverless file sharing on AWS.\n\nStart with **Auth > Sign up** (or **Sign in**): the test script stores `IdToken`, `RefreshToken` and `USER_ID` in collection variables, so every Files request works straight after.\n\nUpload flow: **Create upload** -> PUT the raw bytes to the returned `upload_url` (with `upload_headers`) -> **Complete upload**.\n\nSet `API_BASE_URL` to the `api_url` Terraform output, e.g. `https://abc123.execute-api.ap-south-1.amazonaws.com/dev`, or `http://localhost:4000` for the offline stack.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Sign up",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/users",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "users"
+              ]
+            },
+            "description": "Create an account and sign in.\n201 -> { user_id, email, id_token, access_token, refresh_token, expires_in }.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Ada Lovelace\",\n  \"email\": \"ada@example.com\",\n  \"password\": \"correct-horse-battery\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "if (r.id_token) pm.collectionVariables.set('IdToken', r.id_token);",
+                  "if (r.refresh_token) pm.collectionVariables.set('RefreshToken', r.refresh_token);",
+                  "if (r.user_id) pm.collectionVariables.set('USER_ID', r.user_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sign in",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/login",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "login"
+              ]
+            },
+            "description": "200 -> { id_token, access_token, refresh_token, expires_in }. Tokens last 1 hour.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"ada@example.com\",\n  \"password\": \"correct-horse-battery\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "if (r.id_token) pm.collectionVariables.set('IdToken', r.id_token);",
+                  "if (r.refresh_token) pm.collectionVariables.set('RefreshToken', r.refresh_token);",
+                  "if (r.user_id) pm.collectionVariables.set('USER_ID', r.user_id);",
+                  "pm.sendRequest({ url: pm.collectionVariables.get('API_BASE_URL') + '/v1/userinfo', header: { Authorization: 'Bearer ' + r.id_token } },",
+                  "  (err, res) => { if (!err && res.code === 200) pm.collectionVariables.set('USER_ID', res.json().user_id); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User info",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{IdToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/userinfo",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "userinfo"
+              ]
+            },
+            "description": "Validate a token and resolve the caller. 200 -> { user_id, name, email }. The file Lambdas call this on every request."
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/refresh-token",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "refresh-token"
+              ]
+            },
+            "description": "Swap a refresh token (valid 30 days) for fresh tokens.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{RefreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "if (r.id_token) pm.collectionVariables.set('IdToken', r.id_token);",
+                  "if (r.refresh_token) pm.collectionVariables.set('RefreshToken', r.refresh_token);",
+                  "if (r.user_id) pm.collectionVariables.set('USER_ID', r.user_id);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Files",
+      "item": [
+        {
+          "name": "List files",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{IdToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{USER_ID}}",
+                "files"
+              ]
+            },
+            "description": "200 -> { user_id, user_files: [{ file_id, file_name, content_type, size, uploaded_at, status }] }."
+          },
+          "response": []
+        },
+        {
+          "name": "Create upload",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{IdToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{USER_ID}}",
+                "files"
+              ]
+            },
+            "description": "Reserve a file and get a presigned S3 PUT URL (valid 1 hour, files up to 5 GB).\n201 -> { file_id, upload_url, upload_headers, status: 'UPLOADING' }.\nThen PUT the raw bytes to upload_url with the same Content-Type and any upload_headers, and call Complete upload.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"file_name\": \"report.pdf\",\n  \"content_type\": \"application/pdf\",\n  \"size\": 1048576\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "if (r.file_id) pm.collectionVariables.set('FILE_ID', r.file_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Complete upload",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{IdToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}/complete",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{USER_ID}}",
+                "files",
+                "{{FILE_ID}}",
+                "complete"
+              ]
+            },
+            "description": "Call after the PUT to S3 finishes. Records the real size.\n200 -> { file_id, size, status: 'READY' }."
+          },
+          "response": []
+        },
+        {
+          "name": "Download link",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{IdToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}/download",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{USER_ID}}",
+                "files",
+                "{{FILE_ID}}",
+                "download"
+              ]
+            },
+            "description": "200 -> { file_id, file_name, download_url } (presigned, valid 1 hour)."
+          },
+          "response": []
+        },
+        {
+          "name": "Share by email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{IdToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}/share",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{USER_ID}}",
+                "files",
+                "{{FILE_ID}}",
+                "share"
+              ]
+            },
+            "description": "Email a 1-hour download link to each address via SES.\n201 -> { file_id, file_name, status: 'SHARED' }.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"share_with\": [\n    \"friend@example.com\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create QR link",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{IdToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}/qr",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{USER_ID}}",
+                "files",
+                "{{FILE_ID}}",
+                "qr"
+              ]
+            },
+            "description": "Create a short public link for QR codes.\n201 -> { short_url, expires_at }.\nOpening short_url (GET /v1/d/{code}, no auth) redirects to a fresh download until it expires (1 hour) or the file is deleted."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete file",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{IdToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{USER_ID}}",
+                "files",
+                "{{FILE_ID}}"
+              ]
+            },
+            "description": "Delete the S3 object and its record. Owner only. Shared and QR links stop working.\n200 -> { file_id, file_name, file_status: 'DELETED' }."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "API_BASE_URL",
+      "value": "http://localhost:4000",
+      "type": "string"
+    },
+    {
+      "key": "IdToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "RefreshToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "USER_ID",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "FILE_ID",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}

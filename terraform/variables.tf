@@ -16,6 +16,12 @@ variable "app_name" {
   default     = "enclave"
 }
 
+variable "display_name" {
+  description = "Product name shown to people (e.g. in share emails). Separate from app_name, which prefixes AWS resource names."
+  type        = string
+  default     = "DropVault"
+}
+
 variable "environment" {
   description = "Deployment environment (also the API Gateway stage name)"
   type        = string
@@ -52,7 +58,7 @@ variable "kms_mode" {
 }
 
 # --- Auth microservice (external, independent) ---
-# Enclave knows the auth service ONLY by its endpoint. It validates and
+# DropVault knows the auth service ONLY by its endpoint. It validates and
 # resolves callers via {auth_endpoint}/v1/userinfo - never touching the auth
 # implementation, its identity store, or its infrastructure.
 variable "auth_endpoint" {
@@ -61,7 +67,7 @@ variable "auth_endpoint" {
   default     = ""
 }
 
-# --- Custom domain (optional; Enclave creates its OWN ACM cert) ---
+# --- Custom domain (optional; DropVault creates its OWN ACM cert) ---
 variable "api_domain_name" {
   description = "Custom domain for this API, e.g. files.example.com. Empty = use the default execute-api URL."
   type        = string

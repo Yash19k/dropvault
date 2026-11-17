@@ -77,19 +77,21 @@ def build_email_html(sender, file_name, download_url, app_name):
     '''A clean, generic, branded HTML email.'''
     sender_label = sender or 'A {0} user'.format(app_name)
     return '''\
-<!doctype html><html><body style="margin:0;background:#0b1120;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
-  <div style="max-width:520px;margin:0 auto;padding:32px 24px;color:#e2e8f0;">
-    <h1 style="font-size:20px;color:#ffffff;margin:0 0 16px;">{app_name}</h1>
-    <p style="color:#cbd5e1;line-height:1.6;">
-      <strong style="color:#ffffff;">{sender}</strong> shared a file with you:
-    </p>
-    <p style="font-size:18px;color:#ffffff;margin:8px 0 24px;">{file_name}</p>
-    <a href="{url}" style="display:inline-block;background:#4f46e5;color:#ffffff;text-decoration:none;
-       padding:12px 22px;border-radius:12px;font-weight:600;">Download file</a>
-    <p style="color:#94a3b8;font-size:13px;margin-top:24px;line-height:1.6;">
-      This link is valid for <strong>one hour</strong>. If you weren't expecting this file, you can ignore this email.
-    </p>
-    <p style="color:#64748b;font-size:12px;margin-top:24px;">Sent securely via {app_name}.</p>
+<!doctype html><html><body style="margin:0;background:#f7f7f5;font-family:'IBM Plex Sans',Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+  <div style="max-width:520px;margin:0 auto;padding:40px 24px;">
+    <div style="font-size:15px;font-weight:600;color:#1b1b18;margin:0 0 24px;">{app_name}</div>
+    <div style="background:#ffffff;border:1px solid #e5e5e0;border-radius:8px;padding:28px;">
+      <p style="margin:0;color:#5c5c55;font-size:14px;line-height:1.6;">
+        <strong style="color:#1b1b18;">{sender}</strong> shared a file with you:
+      </p>
+      <p style="margin:10px 0 24px;color:#1b1b18;font-size:17px;font-weight:600;word-break:break-all;">{file_name}</p>
+      <a href="{url}" style="display:inline-block;background:#0e6b5e;color:#ffffff;text-decoration:none;
+         padding:11px 20px;border-radius:6px;font-size:14px;font-weight:600;">Download file</a>
+      <p style="margin:24px 0 0;color:#8b8b83;font-size:13px;line-height:1.6;">
+        This link works for <strong style="color:#5c5c55;">one hour</strong>. If you weren't expecting this file, you can ignore this email.
+      </p>
+    </div>
+    <p style="margin:20px 0 0;color:#8b8b83;font-size:12px;">Sent with {app_name}.</p>
   </div>
 </body></html>'''.format(app_name=app_name, sender=sender_label, file_name=file_name, url=download_url)
 
@@ -122,7 +124,7 @@ def share_file(file_item, sender, req_body, conf_values):
             },
             ExpiresIn=3600
         )
-        app_name = os.getenv('APP_NAME', 'Enclave')
+        app_name = os.getenv('APP_NAME', 'DropVault')
         for email in req_body['share_with']:
             send_file_link(sender, email, file_item['file_name'], download_url, app_name)
     except Exception as error:

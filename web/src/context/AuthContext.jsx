@@ -2,9 +2,10 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef } f
 import { authApi } from '../api/authApi';
 
 const AuthContext = createContext(null);
-const LS = 'enclave.session';
+const LS = 'dropvault.session';
+const LEGACY_LS = 'enclave.session'; // pre-rename key: migrated on load so nobody is signed out
 const RENEW_EARLY_MS = 60 * 1000; // renew this long before the token expires
-export const SESSION_EXPIRED_EVENT = 'enclave:session-expired';
+export const SESSION_EXPIRED_EVENT = 'dropvault:session-expired';
 
 // When does the session's id token expire (ms epoch)?
 function tokenExpiry(session) {
@@ -25,7 +26,11 @@ const withExpiry = (tokens) => Date.now() + (tokens.expires_in || 3600) * 1000;
 
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(LS) || 'null'); } catch { return null; }
+    try {
+      const saved = localStorage.getItem(LS) || localStorage.getItem(LEGACY_LS);
+      localStorage.removeItem(LEGACY_LS);
+      return JSON.parse(saved || 'null');
+    } catch { return null; }
   });
   // True while an expired session is being renewed, so pages don't fire
   // requests with a dead token (and the user isn't bounced to /login).
@@ -85,9 +90,9 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onRejected);
   }, [renew]);
 
-  const signIn = useCallback(({ email, userId, tokens }) => {
+  const signIn = useCallback(({ email, name, userId, tokens }) => {
     setNotice('');
-    setSession({ email, userId, tokens, ts: Date.now(), expiresAt: withExpiry(tokens) });
+    setSession({ email, name, userId, tokens, ts: Date.now(), expiresAt: withExpiry(tokens) });
   }, []);
 
   const signOut = useCallback(async () => {

@@ -1,4 +1,4 @@
-# Start Enclave fully offline: LocalStack (Docker) + local API + web app.
+# Start DropVault fully offline: LocalStack (Docker) + local API + web app.
 #   powershell -ExecutionPolicy Bypass -File local\start.ps1            # kms_mode = s3
 #   powershell -ExecutionPolicy Bypass -File local\start.ps1 per_user   # one KMS key per user
 param([string]$KmsMode = "s3")

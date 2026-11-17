@@ -1,5 +1,5 @@
 #! /usr/bin/env python
-'''Simple auth service for Enclave: email + password sign-up and sign-in.
+'''Simple auth service for DropVault: email + password sign-up and sign-in.
 
 Routes (API Gateway REST, Lambda proxy):
   POST /v1/users          {full_name, email, password} -> tokens + user_id (signed in)

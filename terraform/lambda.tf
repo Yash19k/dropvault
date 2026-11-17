@@ -33,7 +33,7 @@ resource "aws_lambda_function" "fn" {
       each.key == "share" ? {
         SENDER_EMAIL   = var.sender_email
         SENDER_SES_ARN = local.sender_ses_arn
-        APP_NAME       = var.app_name
+        APP_NAME       = var.display_name
       } : {}
     )
   }

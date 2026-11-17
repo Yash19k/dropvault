@@ -1,20 +1,22 @@
 import { Link } from 'react-router-dom';
 import { Logo } from './ui';
-import { APP_TAGLINE } from '../brand';
+import { ThemeToggle } from '../theme';
 
-export default function AuthShell({ title, subtitle, children }) {
+export default function AuthShell({ title, subtitle, children, footer }) {
   return (
-    <div className="min-h-screen">
-      <header className="mx-auto flex max-w-6xl items-center justify-between px-5 py-5">
-        <Link to="/"><Logo /></Link>
+    <div className="flex min-h-screen flex-col">
+      <header className="flex h-16 items-center justify-between px-5 sm:px-8">
+        <Link to="/" aria-label="DropVault home"><Logo /></Link>
+        <ThemeToggle />
       </header>
 
-      <main className="mx-auto flex max-w-md flex-col px-5 py-10 sm:py-16">
-        <div className="mb-6 text-center">
-          <h1 className="text-2xl font-bold tracking-tight text-white">{title}</h1>
-          <p className="mt-1.5 text-sm text-slate-400">{subtitle || APP_TAGLINE}</p>
+      <main className="flex flex-1 justify-center px-5 pb-16 pt-8 sm:pt-20">
+        <div className="w-full max-w-[380px]">
+          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+          {subtitle && <p className="mt-1.5 text-sm text-muted">{subtitle}</p>}
+          <div className="panel mt-7 p-6 shadow-sm">{children}</div>
+          {footer && <p className="mt-5 text-center text-sm text-muted">{footer}</p>}
         </div>
-        <div className="card p-7">{children}</div>
       </main>
     </div>
   );

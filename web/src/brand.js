@@ -1,3 +1,4 @@
-// Single source of truth for the product name. Change this one line to rename.
-export const APP_NAME = 'Enclave';
-export const APP_TAGLINE = 'Secure file sharing, powered by CognitoApi';
+// Single source of truth for the product name.
+export const APP_NAME = 'DropVault';
+export const APP_TAGLINE = 'Share files with links that expire.';
+export const REPO_URL = 'https://github.com/Yash19k/dropvault';

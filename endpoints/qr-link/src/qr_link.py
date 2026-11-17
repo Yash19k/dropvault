@@ -66,10 +66,12 @@ def html_page(status, title, message):
     '''Friendly page for people who scan an expired/invalid code on a phone.'''
     body = '''<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{t}</title></head>
-<body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1120;
-font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#e2e8f0;padding:24px;box-sizing:border-box">
-<div style="max-width:420px;text-align:center"><h1 style="font-size:20px;color:#fff;margin:0 0 12px">{t}</h1>
-<p style="color:#94a3b8;line-height:1.6;margin:0">{m}</p></div></body></html>'''.format(
+<body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f7f5;
+font-family:'IBM Plex Sans',Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1b1b18;padding:24px;box-sizing:border-box">
+<div style="max-width:400px;background:#fff;border:1px solid #e5e5e0;border-radius:8px;padding:28px;text-align:center">
+<div style="font-size:13px;font-weight:600;color:#0e6b5e;margin:0 0 14px">DropVault</div>
+<h1 style="font-size:19px;margin:0 0 10px">{t}</h1>
+<p style="color:#5c5c55;font-size:14px;line-height:1.6;margin:0">{m}</p></div></body></html>'''.format(
         t=html.escape(title), m=html.escape(message))
     return {'statusCode': status, 'body': body, 'isBase64Encoded': False,
             'headers': {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'}}

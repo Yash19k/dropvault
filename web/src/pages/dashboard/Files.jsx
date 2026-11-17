@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
-  UploadCloud, Search, RefreshCw, Download, Share2, Link2, Trash2, X, Send, QrCode, Copy, Check,
-  AlertTriangle, Image, Video, Music, FileText, FileArchive, FileCode, File as FileIcon, Loader2,
+  Upload, Search, RefreshCw, Download, Mail, Link2, Trash2, X, Send, QrCode, Copy, Check,
+  AlertTriangle, Image, Video, Music, FileText, FileArchive, FileCode, File as FileIcon,
+  CheckCircle2, AlertCircle, ArrowDownToLine,
 } from 'lucide-react';
-import { Spinner } from '../../components/ui';
+import { Spinner, Modal } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../components/Toast';
 import { filesApi } from '../../api/filesApi';
@@ -14,14 +15,13 @@ const KIND_ICON = {
   image: Image, video: Video, audio: Music, pdf: FileText,
   archive: FileArchive, code: FileCode, document: FileText, file: FileIcon,
 };
-const KIND_COLOR = {
-  image: 'text-emerald-400 bg-emerald-500/10', video: 'text-fuchsia-400 bg-fuchsia-500/10',
-  audio: 'text-amber-400 bg-amber-500/10', pdf: 'text-rose-400 bg-rose-500/10',
-  archive: 'text-orange-400 bg-orange-500/10', code: 'text-sky-400 bg-sky-500/10',
-  document: 'text-brand-400 bg-brand-500/10', file: 'text-slate-300 bg-white/5',
+const KIND_LABEL = {
+  image: 'Image', video: 'Video', audio: 'Audio', pdf: 'PDF',
+  archive: 'Archive', code: 'Code', document: 'Document', file: 'File',
 };
 
 const MAX_UPLOAD_BYTES = 5 * 1024 ** 3; // S3 single-PUT limit (5 GiB)
+const SORTS = { date: 'Newest first', name: 'Name', size: 'Largest first' };
 
 export default function Files() {
   const { session } = useAuth();
@@ -33,7 +33,7 @@ export default function Files() {
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('date');
-  const [uploads, setUploads] = useState([]); // active: {id, name, progress, error}
+  const [uploads, setUploads] = useState([]); // {id, name, size, progress, status: uploading|done|error}
   const [dragging, setDragging] = useState(false);
   const [shareFor, setShareFor] = useState(null);
   const [qrFor, setQrFor] = useState(null);
@@ -50,19 +50,20 @@ export default function Files() {
 
   useEffect(() => { load(); }, [load]);
 
+  const patchUpload = (id, patch) => setUploads((u) => u.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+
   const uploadOne = async (file) => {
-    const tmp = Math.random().toString(36).slice(2);
-    setUploads((u) => [...u, { id: tmp, name: file.name, progress: 0 }]);
+    const id = Math.random().toString(36).slice(2);
+    setUploads((u) => [...u, { id, name: file.name, size: file.size, progress: 0, status: 'uploading' }]);
     try {
       await filesApi.upload({
         userId, idToken, file,
-        onProgress: (p) => setUploads((u) => u.map((x) => (x.id === tmp ? { ...x, progress: p } : x))),
+        onProgress: (p) => patchUpload(id, { progress: p }),
       });
-      setUploads((u) => u.filter((x) => x.id !== tmp));
-      toast.success(`Uploaded ${file.name}`);
+      patchUpload(id, { progress: 100, status: 'done' });
       load();
     } catch (err) {
-      setUploads((u) => u.map((x) => (x.id === tmp ? { ...x, error: true } : x)));
+      patchUpload(id, { status: 'error' });
       toast.error(err);
     }
   };
@@ -78,10 +79,32 @@ export default function Files() {
     });
   };
 
-  const onDrop = (e) => {
-    e.preventDefault(); setDragging(false);
-    if (e.dataTransfer.files?.length) handleFiles(e.dataTransfer.files);
-  };
+  // Drop files anywhere on the page. A ref keeps the window listeners pointed
+  // at the latest handleFiles without re-binding on every render.
+  const handleFilesRef = useRef(handleFiles);
+  handleFilesRef.current = handleFiles;
+  useEffect(() => {
+    let depth = 0;
+    const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+    const enter = (e) => { if (hasFiles(e)) { depth += 1; setDragging(true); } };
+    const leave = (e) => { if (hasFiles(e)) { depth = Math.max(0, depth - 1); if (!depth) setDragging(false); } };
+    const over = (e) => { if (hasFiles(e)) e.preventDefault(); };
+    const drop = (e) => {
+      if (!e.dataTransfer?.files?.length) return;
+      e.preventDefault(); depth = 0; setDragging(false);
+      handleFilesRef.current(e.dataTransfer.files);
+    };
+    window.addEventListener('dragenter', enter);
+    window.addEventListener('dragleave', leave);
+    window.addEventListener('dragover', over);
+    window.addEventListener('drop', drop);
+    return () => {
+      window.removeEventListener('dragenter', enter);
+      window.removeEventListener('dragleave', leave);
+      window.removeEventListener('dragover', over);
+      window.removeEventListener('drop', drop);
+    };
+  }, []);
 
   const download = async (f) => {
     try {
@@ -96,178 +119,280 @@ export default function Files() {
     try {
       const r = await filesApi.download(userId, f.file_id, idToken);
       await navigator.clipboard.writeText(r.download_url);
-      toast.success('Download link copied (valid 1 hour).');
+      toast.success('Link copied. It works for 1 hour.');
     } catch (err) { toast.error(err); }
   };
-
-  // Opens the confirmation popup; the actual delete runs from DeleteModal.
-  const remove = (f) => setDeleteFor(f);
 
   const confirmDelete = async (f) => {
     await filesApi.remove(userId, f.file_id, idToken);
     setFiles((list) => list.filter((x) => x.file_id !== f.file_id));
-    toast.success('File deleted.');
+    toast.success(`Deleted ${f.file_name}.`);
   };
 
-  const visible = (files || [])
-    .filter((f) => f.file_name.toLowerCase().includes(query.toLowerCase()))
+  const visible = useMemo(() => (files || [])
+    .filter((f) => f.file_name.toLowerCase().includes(query.trim().toLowerCase()))
     .sort((a, b) => {
       if (sort === 'name') return a.file_name.localeCompare(b.file_name);
       if (sort === 'size') return (b.size || 0) - (a.size || 0);
       return (b.uploaded_at || '').localeCompare(a.uploaded_at || '');
-    });
+    }), [files, query, sort]);
+
+  const totalBytes = useMemo(() => (files || []).reduce((n, f) => n + (Number(f.size) || 0), 0), [files]);
+  const openPicker = () => inputRef.current?.click();
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div>
+      <input ref={inputRef} type="file" multiple className="hidden"
+        onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }} />
+
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">My Files</h1>
-          <p className="mt-1 text-sm text-slate-400">Upload, download, and share with expiring links.</p>
+          <h1 className="text-xl font-semibold tracking-tight">All files</h1>
+          <p className="mt-1 text-sm text-muted">
+            {files
+              ? <span className="tabular-nums">{files.length} {files.length === 1 ? 'file' : 'files'} · {formatBytes(totalBytes)} · </span>
+              : null}
+            Up to 5 GB per file. Links expire after 1 hour.
+          </p>
         </div>
-        <button onClick={load} className="btn-ghost text-sm" disabled={loading}>
-          {loading ? <Spinner /> : <RefreshCw className="h-4 w-4" />} Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={load} className="btn-secondary w-9 px-0" disabled={loading} title="Refresh" aria-label="Refresh">
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button onClick={openPicker} className="btn-primary">
+            <Upload className="h-4 w-4" /> Upload
+          </button>
+        </div>
       </div>
-
-      {/* Upload dropzone */}
-      <div
-        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-        onClick={() => inputRef.current?.click()}
-        className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-10 text-center transition ${
-          dragging ? 'border-brand-500 bg-brand-500/10' : 'border-white/15 bg-white/[0.02] hover:border-brand-500/40 hover:bg-white/[0.04]'
-        }`}
-      >
-        <div className="mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-brand-500/10 text-brand-400">
-          <UploadCloud className="h-6 w-6" />
-        </div>
-        <p className="text-sm text-slate-200"><span className="font-semibold text-white">Drop files here</span> or click to browse</p>
-        <p className="mt-1 text-xs text-slate-500">Uploaded straight to your private storage. Up to 5 GB per file.</p>
-        <input ref={inputRef} type="file" multiple className="hidden"
-          onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }} />
-      </div>
-
-      {/* Active uploads */}
-      {uploads.length > 0 && (
-        <div className="space-y-2">
-          {uploads.map((u) => (
-            <div key={u.id} className="card p-3">
-              <div className="mb-1.5 flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2 truncate text-slate-200">
-                  <Loader2 className={`h-3.5 w-3.5 ${u.error ? 'text-rose-400' : 'animate-spin text-brand-400'}`} />
-                  <span className="truncate">{u.name}</span>
-                </span>
-                <span className={u.error ? 'text-rose-400' : 'text-slate-400'}>{u.error ? 'Failed' : `${u.progress}%`}</span>
-              </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
-                <div className={`h-full rounded-full ${u.error ? 'bg-rose-500' : 'bg-brand-500'} transition-all`} style={{ width: `${u.progress}%` }} />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
 
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-          <input className="input pl-10" placeholder="Search files…" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <div className="mt-6 flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-subtle" />
+          <input className="input h-9 pl-9" placeholder="Search files…" value={query}
+            onChange={(e) => setQuery(e.target.value)} aria-label="Search files" />
         </div>
-        <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value)}>
-          <option value="date">Newest</option>
-          <option value="name">Name</option>
-          <option value="size">Largest</option>
+        <select className="input h-9 w-auto pr-8" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort files">
+          {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
       </div>
 
-      {/* Library */}
-      {loading && !files && <div className="flex items-center gap-2 text-sm text-slate-400"><Spinner /> Loading files…</div>}
+      {/* File table */}
+      <div className="panel mt-4 overflow-hidden">
+        <div className="hidden grid-cols-[minmax(0,1fr)_96px_128px_188px] items-center gap-4 border-b border-line bg-surface-2 px-4 py-2 text-xs font-medium text-muted sm:grid">
+          <span>Name</span><span className="text-right">Size</span><span>Uploaded</span><span className="sr-only">Actions</span>
+        </div>
 
-      {files && visible.length === 0 && (
-        <div className="rounded-2xl border border-dashed border-white/10 p-12 text-center">
-          <p className="text-sm text-slate-400">{query ? 'No files match your search.' : 'No files yet — drop one above to get started.'}</p>
+        {!files && loading && <SkeletonRows />}
+
+        {files && files.length === 0 && (
+          <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
+            <div className="grid h-11 w-11 place-items-center rounded-lg border border-line bg-surface-2 text-muted">
+              <ArrowDownToLine className="h-5 w-5" />
+            </div>
+            <h2 className="mt-4 text-[15px] font-semibold">No files yet</h2>
+            <p className="mt-1 max-w-xs text-sm text-muted">Drag files anywhere onto this page, or choose them from your computer.</p>
+            <button onClick={openPicker} className="btn-primary mt-5"><Upload className="h-4 w-4" /> Upload files</button>
+          </div>
+        )}
+
+        {files && files.length > 0 && visible.length === 0 && (
+          <div className="px-6 py-12 text-center text-sm text-muted">No files match “{query}”.</div>
+        )}
+
+        {visible.length > 0 && (
+          <ul className="divide-y divide-line">
+            {visible.map((f) => (
+              <FileRow key={f.file_id} f={f}
+                onDownload={() => download(f)} onShare={() => setShareFor(f)} onCopy={() => copyLink(f)}
+                onQr={() => setQrFor(f)} onDelete={() => setDeleteFor(f)} />
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {dragging && (
+        <div className="pointer-events-none fixed inset-0 z-40 grid place-items-center bg-canvas/80 p-6">
+          <div className="grid h-full w-full place-items-center rounded-xl border-2 border-dashed border-accent bg-accent-soft">
+            <div className="text-center">
+              <ArrowDownToLine className="mx-auto h-8 w-8 text-accent" />
+              <p className="mt-3 text-base font-semibold">Drop to upload</p>
+              <p className="mt-1 text-sm text-muted">Up to 5 GB per file</p>
+            </div>
+          </div>
         </div>
       )}
 
-      {visible.length > 0 && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {visible.map((f) => {
-            const kind = fileKind(f.file_name, f.content_type);
-            const Icon = KIND_ICON[kind];
-            const uploading = f.status && f.status !== 'READY';
-            return (
-              <div key={f.file_id} className="card group flex flex-col p-4 transition hover:border-brand-500/30 hover:bg-white/[0.05]">
-                <div className="flex items-start gap-3">
-                  <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl ${KIND_COLOR[kind]}`}>
-                    <Icon className="h-5 w-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-white" title={f.file_name}>{f.file_name}</div>
-                    <div className="mt-0.5 text-xs text-slate-500">
-                      {formatBytes(f.size)}{f.uploaded_at ? ` · ${formatDate(f.uploaded_at)}` : ''}
-                    </div>
-                  </div>
-                </div>
+      {uploads.length > 0 && <UploadTray uploads={uploads} onClear={() => setUploads((u) => u.filter((x) => x.status === 'uploading'))} />}
 
-                {uploading ? (
-                  <div className="mt-4 flex items-center justify-between gap-2 border-t border-white/5 pt-3 text-xs text-amber-400">
-                    <span className="flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Uploading…</span>
-                    <button onClick={() => remove(f)} className="rounded-lg px-2 py-1 text-rose-400 hover:bg-rose-500/10" title="Remove">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="mt-4 flex items-center gap-1 border-t border-white/5 pt-3">
-                    <button onClick={() => download(f)} className="flex-1 rounded-lg px-2 py-1.5 text-xs text-slate-300 hover:bg-white/5 hover:text-white" title="Download">
-                      <Download className="mx-auto h-4 w-4" />
-                    </button>
-                    <button onClick={() => setShareFor(f)} className="flex-1 rounded-lg px-2 py-1.5 text-xs text-slate-300 hover:bg-white/5 hover:text-white" title="Share by email">
-                      <Share2 className="mx-auto h-4 w-4" />
-                    </button>
-                    <button onClick={() => copyLink(f)} className="flex-1 rounded-lg px-2 py-1.5 text-xs text-slate-300 hover:bg-white/5 hover:text-white" title="Copy link">
-                      <Link2 className="mx-auto h-4 w-4" />
-                    </button>
-                    <button onClick={() => setQrFor(f)} className="flex-1 rounded-lg px-2 py-1.5 text-xs text-slate-300 hover:bg-white/5 hover:text-white" title="QR code">
-                      <QrCode className="mx-auto h-4 w-4" />
-                    </button>
-                    <button onClick={() => remove(f)} className="flex-1 rounded-lg px-2 py-1.5 text-xs text-rose-400 hover:bg-rose-500/10" title="Delete">
-                      <Trash2 className="mx-auto h-4 w-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {shareFor && (
-        <ShareModal file={shareFor} userId={userId} idToken={idToken} onClose={() => setShareFor(null)} />
-      )}
-      {qrFor && (
-        <QrModal file={qrFor} userId={userId} idToken={idToken} onClose={() => setQrFor(null)} />
-      )}
-      {deleteFor && (
-        <DeleteModal file={deleteFor} onConfirm={confirmDelete} onClose={() => setDeleteFor(null)} />
-      )}
+      {shareFor && <ShareModal file={shareFor} userId={userId} idToken={idToken} onClose={() => setShareFor(null)} />}
+      {qrFor && <QrModal file={qrFor} userId={userId} idToken={idToken} onClose={() => setQrFor(null)} />}
+      {deleteFor && <DeleteModal file={deleteFor} onConfirm={confirmDelete} onClose={() => setDeleteFor(null)} />}
     </div>
   );
 }
 
-// Shared popup shell: dimmed backdrop, click-outside and Escape to close.
-function Modal({ onClose, children, className = 'max-w-md' }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+function FileRow({ f, onDownload, onShare, onCopy, onQr, onDelete }) {
+  const kind = fileKind(f.file_name, f.content_type);
+  const Icon = KIND_ICON[kind];
+  const pending = f.status && f.status !== 'READY';
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div role="dialog" aria-modal="true" className={`card w-full p-6 ${className}`} onClick={(e) => e.stopPropagation()}>
-        {children}
+    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors hover:bg-surface-2 sm:grid-cols-[minmax(0,1fr)_96px_128px_188px]">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-line bg-surface-2 text-muted">
+          <Icon className="h-4 w-4" />
+        </div>
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium" title={f.file_name}>{f.file_name}</div>
+          <div className="mt-0.5 text-xs text-muted sm:hidden">
+            {KIND_LABEL[kind]} · {formatBytes(f.size)}{f.uploaded_at ? ` · ${formatDate(f.uploaded_at)}` : ''}
+          </div>
+          <div className="mt-0.5 hidden text-xs text-subtle sm:block">{KIND_LABEL[kind]}</div>
+        </div>
       </div>
+      <div className="hidden text-right font-mono text-[13px] text-muted sm:block">{formatBytes(f.size)}</div>
+      <div className="hidden text-sm text-muted sm:block">{formatDate(f.uploaded_at)}</div>
+
+      <div className="col-span-2 flex items-center justify-end gap-0.5 sm:col-span-1">
+        {pending ? (
+          <>
+            <span className="mr-auto flex items-center gap-1.5 text-xs text-muted sm:mr-1"><Spinner className="h-3.5 w-3.5" /> Uploading…</span>
+            <button onClick={onDelete} className="btn-icon-danger" title="Delete" aria-label={`Delete ${f.file_name}`}>
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </>
+        ) : (
+          <>
+            <button onClick={onDownload} className="btn-icon" title="Download" aria-label={`Download ${f.file_name}`}><Download className="h-4 w-4" /></button>
+            <button onClick={onShare} className="btn-icon" title="Share by email" aria-label={`Share ${f.file_name} by email`}><Mail className="h-4 w-4" /></button>
+            <button onClick={onCopy} className="btn-icon" title="Copy link" aria-label={`Copy link to ${f.file_name}`}><Link2 className="h-4 w-4" /></button>
+            <button onClick={onQr} className="btn-icon" title="QR code" aria-label={`QR code for ${f.file_name}`}><QrCode className="h-4 w-4" /></button>
+            <span className="mx-1 h-4 w-px bg-line" aria-hidden="true" />
+            <button onClick={onDelete} className="btn-icon-danger" title="Delete" aria-label={`Delete ${f.file_name}`}><Trash2 className="h-4 w-4" /></button>
+          </>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function SkeletonRows() {
+  return (
+    <div className="divide-y divide-line" aria-label="Loading files">
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="flex items-center gap-3 px-4 py-3.5">
+          <div className="h-9 w-9 animate-pulse rounded-md bg-surface-2" />
+          <div className="flex-1 space-y-2">
+            <div className="h-3 w-1/3 animate-pulse rounded bg-surface-2" />
+            <div className="h-2.5 w-16 animate-pulse rounded bg-surface-2" />
+          </div>
+        </div>
+      ))}
     </div>
+  );
+}
+
+function UploadTray({ uploads, onClear }) {
+  const active = uploads.filter((u) => u.status === 'uploading').length;
+  const failed = uploads.filter((u) => u.status === 'error').length;
+  const title = active
+    ? `Uploading ${active} ${active === 1 ? 'file' : 'files'}`
+    : failed ? `${failed} ${failed === 1 ? 'upload' : 'uploads'} failed` : 'Uploads complete';
+  return (
+    <div className="panel fixed bottom-4 right-4 z-40 w-[min(360px,calc(100vw-2rem))] overflow-hidden shadow-lg">
+      <div className="flex items-center justify-between border-b border-line bg-surface-2 px-4 py-2.5">
+        <span className="text-sm font-medium">{title}</span>
+        {!active && (
+          <button onClick={onClear} className="btn-icon -mr-1.5 h-7 w-7" aria-label="Close uploads"><X className="h-4 w-4" /></button>
+        )}
+      </div>
+      <ul className="max-h-64 divide-y divide-line overflow-y-auto">
+        {uploads.map((u) => (
+          <li key={u.id} className="px-4 py-2.5">
+            <div className="flex items-center gap-2 text-sm">
+              {u.status === 'done' && <CheckCircle2 className="h-4 w-4 shrink-0 text-accent" />}
+              {u.status === 'error' && <AlertCircle className="h-4 w-4 shrink-0 text-danger" />}
+              {u.status === 'uploading' && <Spinner className="h-4 w-4 shrink-0 text-muted" />}
+              <span className="min-w-0 flex-1 truncate" title={u.name}>{u.name}</span>
+              <span className={`shrink-0 font-mono text-xs ${u.status === 'error' ? 'text-danger' : 'text-muted'}`}>
+                {u.status === 'error' ? 'Failed' : u.status === 'done' ? formatBytes(u.size) : `${u.progress}%`}
+              </span>
+            </div>
+            {u.status === 'uploading' && (
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-surface-2">
+                <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${u.progress}%` }} />
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function ShareModal({ file, userId, idToken, onClose }) {
+  const toast = useToast();
+  const [emails, setEmails] = useState([]);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const addEmail = (raw) => {
+    const v = raw.trim().replace(/,$/, '');
+    if (!v) return;
+    if (!EMAIL_RE.test(v)) { toast.error(`"${v}" is not a valid email address.`); return; }
+    if (!emails.includes(v)) setEmails((e) => [...e, v]);
+    setDraft('');
+  };
+
+  const submit = async () => {
+    const all = draft.trim() ? [...emails, draft.trim()] : emails;
+    const valid = all.filter((e) => EMAIL_RE.test(e));
+    if (valid.length === 0) { toast.error('Add at least one recipient.'); return; }
+    setBusy(true);
+    try {
+      await filesApi.share(userId, file.file_id, idToken, valid);
+      toast.success(`Sent to ${valid.length} ${valid.length === 1 ? 'person' : 'people'}.`);
+      onClose();
+    } catch (err) { toast.error(err); } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal onClose={onClose} title="Share by email" icon={Mail}
+      footer={<>
+        <button className="btn-secondary" onClick={onClose}>Cancel</button>
+        <button className="btn-primary" onClick={submit} disabled={busy}>
+          {busy ? <Spinner /> : <><Send className="h-4 w-4" /> Send link</>}
+        </button>
+      </>}>
+      <p className="truncate text-sm font-medium" title={file.file_name}>{file.file_name}</p>
+      <p className="mt-1 text-sm text-muted">Each recipient gets an email with a download link that works for 1 hour.</p>
+
+      <label className="label mt-5" htmlFor="share-emails">Recipients</label>
+      <div className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-md border border-line-strong bg-surface px-2 py-1.5 focus-within:border-accent focus-within:ring-3 focus-within:ring-ring">
+        {emails.map((e) => (
+          <span key={e} className="inline-flex items-center gap-1 rounded bg-accent-soft py-0.5 pl-2 pr-1 text-xs font-medium text-accent">
+            {e}
+            <button onClick={() => setEmails((list) => list.filter((x) => x !== e))} className="rounded p-0.5 hover:bg-accent/15" aria-label={`Remove ${e}`}>
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <input id="share-emails" autoFocus
+          className="min-w-[140px] flex-1 bg-transparent px-1 py-0.5 text-sm outline-none placeholder:text-subtle"
+          placeholder={emails.length ? 'Add another…' : 'name@example.com'}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addEmail(draft); }
+            if (e.key === 'Backspace' && !draft && emails.length) setEmails((l) => l.slice(0, -1));
+          }}
+          onBlur={() => addEmail(draft)} />
+      </div>
+      <span className="hint">Press Enter or comma after each address.</span>
+    </Modal>
   );
 }
 
@@ -294,34 +419,25 @@ function QrModal({ file, userId, idToken, onClose }) {
   };
 
   return (
-    <Modal onClose={onClose} className="max-w-sm">
-      <div className="mb-1 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <QrCode className="h-5 w-5 text-brand-400" />
-          <h3 className="font-semibold text-white">Scan to download</h3>
-        </div>
-        <button onClick={onClose} className="text-slate-400 hover:text-white" aria-label="Close"><X className="h-5 w-5" /></button>
-      </div>
-      <p className="mb-4 truncate text-sm text-slate-400" title={file.file_name}>{file.file_name}</p>
-
-      <div className="flex justify-center">
-        <div className="grid h-[288px] w-[288px] place-items-center rounded-2xl bg-white p-3">
-          {url && <QRCodeSVG value={url} size={240} level="M" marginSize={1} />}
-          {!url && !error && <Spinner className="text-slate-500" />}
-          {error && <p className="px-4 text-center text-sm text-rose-600">{error}</p>}
-        </div>
-      </div>
-
-      <p className="mt-4 text-center text-xs text-slate-400">
-        Anyone who scans this can download the file. The link expires in <span className="text-slate-200">1 hour</span>.
-      </p>
-
-      <div className="mt-5 flex justify-end gap-2">
-        <button className="btn-ghost" onClick={onClose}>Close</button>
+    <Modal onClose={onClose} title="Scan to download" icon={QrCode} width="max-w-sm"
+      footer={<>
+        <button className="btn-secondary" onClick={onClose}>Close</button>
         <button className="btn-primary" onClick={copy} disabled={!url}>
           {copied ? <><Check className="h-4 w-4" /> Copied</> : <><Copy className="h-4 w-4" /> Copy link</>}
         </button>
+      </>}>
+      <p className="truncate text-center text-sm font-medium" title={file.file_name}>{file.file_name}</p>
+      <div className="mt-4 flex justify-center">
+        {/* QR codes need dark-on-light to scan reliably, so the plate stays white in dark mode. */}
+        <div className="grid h-[248px] w-[248px] place-items-center rounded-md border border-line bg-white p-3">
+          {url && <QRCodeSVG value={url} size={220} level="M" marginSize={1} />}
+          {!url && !error && <Spinner className="text-neutral-400" />}
+          {error && <p className="px-4 text-center text-sm text-red-700">{error}</p>}
+        </div>
       </div>
+      <p className="mt-4 text-center text-xs text-muted">
+        Anyone who scans this can download the file. The link expires in 1 hour, or as soon as you delete the file.
+      </p>
     </Modal>
   );
 }
@@ -339,97 +455,25 @@ function DeleteModal({ file, onConfirm, onClose }) {
   };
 
   return (
-    <Modal onClose={busy ? () => {} : onClose} className="max-w-sm">
-      <div className="flex items-start gap-4">
-        <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-rose-500/10 text-rose-400">
-          <AlertTriangle className="h-5 w-5" />
+    <Modal onClose={busy ? () => {} : onClose} width="max-w-sm"
+      footer={<>
+        <button className="btn-secondary" onClick={onClose} disabled={busy} autoFocus>Cancel</button>
+        <button className="btn-danger" onClick={confirm} disabled={busy}>
+          {busy ? <Spinner /> : <><Trash2 className="h-4 w-4" /> Delete</>}
+        </button>
+      </>}>
+      <div className="flex items-start gap-3.5">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-danger-soft text-danger">
+          <AlertTriangle className="h-4 w-4" />
         </div>
         <div className="min-w-0">
-          <h3 className="font-semibold text-white">Delete file?</h3>
-          <p className="mt-1 text-sm text-slate-400">
-            <span className="break-all font-medium text-slate-200">{file.file_name}</span> will be permanently
-            deleted. Any links you've shared will stop working. This can't be undone.
+          <h2 className="text-[15px] font-semibold">Delete file?</h2>
+          <p className="mt-1 text-sm text-muted">
+            <span className="break-all font-medium text-fg">{file.file_name}</span> will be permanently deleted.
+            Any links you've shared will stop working. This can't be undone.
           </p>
         </div>
       </div>
-      <div className="mt-6 flex justify-end gap-2">
-        <button className="btn-ghost" onClick={onClose} disabled={busy} autoFocus>Cancel</button>
-        <button
-          className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-500 disabled:opacity-60"
-          onClick={confirm} disabled={busy}
-        >
-          {busy ? <Spinner /> : <><Trash2 className="h-4 w-4" /> Delete</>}
-        </button>
-      </div>
     </Modal>
-  );
-}
-
-function ShareModal({ file, userId, idToken, onClose }) {
-  const toast = useToast();
-  const [emails, setEmails] = useState([]);
-  const [draft, setDraft] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const addEmail = (raw) => {
-    const v = raw.trim().replace(/,$/, '');
-    if (!v) return;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return toast.error(`"${v}" is not a valid email.`);
-    if (!emails.includes(v)) setEmails((e) => [...e, v]);
-    setDraft('');
-  };
-
-  const submit = async () => {
-    const all = draft ? [...emails, draft.trim()] : emails;
-    const valid = all.filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
-    if (valid.length === 0) return toast.error('Add at least one recipient.');
-    setBusy(true);
-    try {
-      await filesApi.share(userId, file.file_id, idToken, valid);
-      toast.success(`Shared with ${valid.length} recipient${valid.length > 1 ? 's' : ''}.`);
-      onClose();
-    } catch (err) { toast.error(err); } finally { setBusy(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="card w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-1 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Share2 className="h-5 w-5 text-brand-400" />
-            <h3 className="font-semibold text-white">Share file</h3>
-          </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white"><X className="h-5 w-5" /></button>
-        </div>
-        <p className="mb-4 truncate text-sm text-slate-400" title={file.file_name}>
-          Recipients get an email with a download link valid for <span className="text-slate-200">1 hour</span>.
-        </p>
-
-        <span className="label">Recipient emails</span>
-        <div className="flex flex-wrap gap-2 rounded-xl border border-white/10 bg-slate-900/60 p-2">
-          {emails.map((e) => (
-            <span key={e} className="inline-flex items-center gap-1 rounded-lg bg-brand-500/15 px-2 py-1 text-xs text-brand-200">
-              {e}
-              <button onClick={() => setEmails((list) => list.filter((x) => x !== e))} className="hover:text-white"><X className="h-3 w-3" /></button>
-            </span>
-          ))}
-          <input
-            className="min-w-[120px] flex-1 bg-transparent px-1 py-1 text-sm text-slate-100 outline-none placeholder:text-slate-500"
-            placeholder="name@example.com"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addEmail(draft); } }}
-            onBlur={() => addEmail(draft)}
-          />
-        </div>
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={submit} disabled={busy}>
-            {busy ? <Spinner /> : <><Send className="h-4 w-4" /> Send</>}
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }

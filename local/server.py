@@ -1,5 +1,5 @@
 #! /usr/bin/env python
-'''Offline backend for Enclave.
+'''Offline backend for DropVault.
 
 One process on http://localhost:4000 that plays two roles:
 
@@ -53,7 +53,7 @@ os.environ.update({
     'AUTH_ENDPOINT': 'http://127.0.0.1:{0}'.format(PORT),
     'SENDER_EMAIL': SENDER,
     'SENDER_SES_ARN': 'arn:aws:ses:{0}:000000000000:identity/{1}'.format(REGION, SENDER),
-    'APP_NAME': 'Enclave',
+    'APP_NAME': 'DropVault',
     'PUBLIC_API_URL': 'http://localhost:{0}'.format(PORT),  # base of QR short links
     'KMS_ALIAS_PREFIX': 'enclave-local',
 })
@@ -357,7 +357,7 @@ def main():
         threading.Thread(target=v6.serve_forever, daemon=True).start()
     except OSError:
         pass  # no IPv6 loopback - IPv4 only
-    print('[api] Enclave local API on http://localhost:{0}  (auth + file API)'.format(PORT))
+    print('[api] DropVault local API on http://localhost:{0}  (auth + file API)'.format(PORT))
     print('[api] Sent emails: {0}/_aws/ses'.format(LOCALSTACK), flush=True)
     server.serve_forever()
 

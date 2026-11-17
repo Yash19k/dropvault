@@ -118,7 +118,7 @@ def ensure_user_kms_key(user_id, conf_values):
 
     # We won the claim: create the single key + alias and publish the ARN.
     key_arn = kms.create_key(
-        Description='Enclave per-user file key ({0})'.format(user_id),
+        Description='DropVault per-user file key ({0})'.format(user_id),
         Tags=[{'TagKey': 'app', 'TagValue': conf_values['KMS_ALIAS_PREFIX']},
               {'TagKey': 'user_id', 'TagValue': user_id}]
     )['KeyMetadata']['Arn']

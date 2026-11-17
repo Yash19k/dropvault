@@ -1,4 +1,4 @@
-# Optional custom domain. Enclave issues its OWN regional ACM certificate
+# Optional custom domain. DropVault issues its OWN regional ACM certificate
 # (DNS-validated in the provided hosted zone) - it never reuses another service's
 # certificate. Enabled only when api_domain_name is set.
 locals {
