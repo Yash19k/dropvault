@@ -1,6 +1,8 @@
 # Short, scannable download links for QR codes (endpoints/qr-link):
-#   POST /v1/users/{user_id}/files/{file_id}/qr  -> create a short link (owner only)
-#   GET  /v1/d/{code}                             -> public 302 to a fresh S3 download
+#   POST   /v1/users/{user_id}/files/{file_id}/qr -> create a short link (owner only)
+#   DELETE /v1/users/{user_id}/files/{file_id}/qr -> revoke all links to the file (owner only)
+#   GET    /v1/d/{code}                            -> public 302 to a fresh S3 download
+# Link lifetime is chosen per request (see endpoints/qr-link/src/links.py).
 
 data "archive_file" "qr" {
   type        = "zip"
@@ -29,7 +31,6 @@ resource "aws_lambda_function" "qr" {
       FILE_SHARING_TABLE = aws_dynamodb_table.files.name
       REGION             = var.aws_region
       USER_FILES_BUCKET  = aws_s3_bucket.files.bucket
-      QR_LINK_TTL        = "3600"
     }
   }
   depends_on = [aws_cloudwatch_log_group.qr]
@@ -64,6 +65,16 @@ module "route_qr_create" {
   execution_arn        = aws_api_gateway_rest_api.api.execution_arn
 }
 
+module "route_qr_revoke" {
+  source               = "./modules/api-lambda-route"
+  rest_api_id          = aws_api_gateway_rest_api.api.id
+  resource_id          = aws_api_gateway_resource.qr.id
+  http_method          = "DELETE"
+  lambda_invoke_arn    = aws_lambda_function.qr.invoke_arn
+  lambda_function_name = aws_lambda_function.qr.function_name
+  execution_arn        = aws_api_gateway_rest_api.api.execution_arn
+}
+
 module "route_qr_follow" {
   source               = "./modules/api-lambda-route"
   rest_api_id          = aws_api_gateway_rest_api.api.id
@@ -74,7 +85,7 @@ module "route_qr_follow" {
   execution_arn        = aws_api_gateway_rest_api.api.execution_arn
 }
 
-# Only the create call comes from the web app (needs CORS); /v1/d is opened directly.
+# Create and revoke come from the web app (needs CORS); /v1/d is opened directly.
 module "cors_qr" {
   source      = "./modules/cors-options"
   rest_api_id = aws_api_gateway_rest_api.api.id

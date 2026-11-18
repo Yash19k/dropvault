@@ -122,7 +122,7 @@ def bootstrap_aws():
 # ---------------------------------------------------------------------------
 def load_handler(folder, module):
     src = os.path.join(ENDPOINTS, folder, 'src')
-    for shared in ('auth', 'log', 'constants'):
+    for shared in ('auth', 'log', 'constants', 'links'):
         sys.modules.pop(shared, None)
     sys.path.insert(0, src)
     try:
@@ -144,6 +144,7 @@ FILE_ROUTES = [
     ('POST', r'^/v1/users/{0}/files/{0}/share$'.format(SEG), ('share-file', 'share_file')),
     ('DELETE', r'^/v1/users/{0}/files/{0}$'.format(SEG), ('delete-user-file', 'delete_user_file')),
     ('POST', r'^/v1/users/{0}/files/{0}/qr$'.format(SEG), ('qr-link', 'qr_link')),
+    ('DELETE', r'^/v1/users/{0}/files/{0}/qr$'.format(SEG), ('qr-link', 'qr_link')),
     ('GET', r'^/v1/d/{0}$'.format(SEG), ('qr-link', 'qr_link')),
 ]
 HANDLERS = {}

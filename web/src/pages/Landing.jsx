@@ -11,14 +11,14 @@ import { APP_NAME, REPO_URL } from '../brand';
 const steps = [
   { n: '01', title: 'Upload', text: 'Drag files in or pick them from your computer. They go straight to private storage, up to 5 GB each.' },
   { n: '02', title: 'Share', text: 'Email a link, copy it, or show a QR code that someone can scan from across the table.' },
-  { n: '03', title: 'It expires', text: 'Links stop working after an hour, and immediately if you delete the file.' },
+  { n: '03', title: 'It expires', text: 'Pick how long a link works, from 15 minutes to never. Turn links off any time.' },
 ];
 
 const features = [
   { icon: UploadCloud, title: 'Direct uploads', text: 'Files go from your browser straight to storage, so large uploads don’t stall on a server.' },
   { icon: Mail, title: 'Email sharing', text: 'Send a file to several people at once. Each gets a plain email with a download link.' },
   { icon: QrCode, title: 'QR codes', text: 'Every file has a short, scannable link. Handy for moving a file from laptop to phone.' },
-  { icon: Clock, title: 'Links that expire', text: 'Download links last one hour. Nothing stays shareable longer than it needs to.' },
+  { icon: Clock, title: 'Links that expire', text: 'Choose 15 minutes, an hour, a week or never, and turn links off whenever you like.' },
   { icon: Lock, title: 'Private by default', text: 'Your files are only visible to you. There are no public folders to misconfigure.' },
   { icon: ShieldCheck, title: 'Encrypted at rest', text: 'Files are stored encrypted on Amazon S3, in a bucket only the app can reach.' },
 ];
@@ -60,7 +60,7 @@ export default function Landing() {
               Share files with links that expire.
             </h1>
             <p className="mt-5 max-w-lg text-[17px] leading-relaxed text-muted">
-              Upload files up to 5 GB, send them by email or QR code, and every link stops working after an hour.
+              Upload files up to 5 GB, send them by email or QR code, and choose how long every link keeps working.
               Nothing stays out there longer than it needs to.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -74,7 +74,7 @@ export default function Landing() {
               )}
             </div>
             <dl className="mt-10 grid max-w-md grid-cols-3 gap-6 border-t border-line pt-6">
-              {[['5 GB', 'per file'], ['1 hour', 'link lifetime'], ['AES-256', 'encryption']].map(([v, k]) => (
+              {[['5 GB', 'per file'], ['15m–never', 'link lifetime'], ['AES-256', 'encryption']].map(([v, k]) => (
                 <div key={k}>
                   <dt className="sr-only">{k}</dt>
                   <dd className="font-mono text-lg font-medium">{v}</dd>

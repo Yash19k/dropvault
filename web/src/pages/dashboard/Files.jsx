@@ -3,12 +3,12 @@ import { QRCodeSVG } from 'qrcode.react';
 import {
   Upload, Search, RefreshCw, Download, Mail, Link2, Trash2, X, Send, QrCode, Copy, Check,
   AlertTriangle, Image, Video, Music, FileText, FileArchive, FileCode, File as FileIcon,
-  CheckCircle2, AlertCircle, ArrowDownToLine,
+  CheckCircle2, AlertCircle, ArrowDownToLine, Link2Off, Clock,
 } from 'lucide-react';
 import { Spinner, Modal } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../components/Toast';
-import { filesApi } from '../../api/filesApi';
+import { filesApi, LINK_EXPIRY, DEFAULT_EXPIRY } from '../../api/filesApi';
 import { formatBytes, formatDate, fileKind } from '../../lib/format';
 
 const KIND_ICON = {
@@ -36,7 +36,8 @@ export default function Files() {
   const [uploads, setUploads] = useState([]); // {id, name, size, progress, status: uploading|done|error}
   const [dragging, setDragging] = useState(false);
   const [shareFor, setShareFor] = useState(null);
-  const [qrFor, setQrFor] = useState(null);
+  const [linkFor, setLinkFor] = useState(null); // { file, qr: bool }
+  const [revokeFor, setRevokeFor] = useState(null);
   const [deleteFor, setDeleteFor] = useState(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const inputRef = useRef(null);
@@ -116,14 +117,6 @@ export default function Files() {
     } catch (err) { toast.error(err); }
   };
 
-  const copyLink = async (f) => {
-    try {
-      const r = await filesApi.download(userId, f.file_id, idToken);
-      await navigator.clipboard.writeText(r.download_url);
-      toast.success('Link copied. It works for 1 hour.');
-    } catch (err) { toast.error(err); }
-  };
-
   const confirmDelete = async (f) => {
     await filesApi.remove(userId, f.file_id, idToken);
     setFiles((list) => list.filter((x) => x.file_id !== f.file_id));
@@ -164,7 +157,7 @@ export default function Files() {
             {files
               ? <span className="tabular-nums">{files.length} {files.length === 1 ? 'file' : 'files'} · {formatBytes(totalBytes)} · </span>
               : null}
-            Up to 5 GB per file. Links expire after 1 hour.
+            Up to 5 GB per file. You choose how long each link works.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -191,7 +184,7 @@ export default function Files() {
 
       {/* File table */}
       <div className="panel mt-4 overflow-hidden">
-        <div className="hidden grid-cols-[minmax(0,1fr)_96px_128px_188px] items-center gap-4 border-b border-line bg-surface-2 px-4 py-2 text-xs font-medium text-muted sm:grid">
+        <div className="hidden grid-cols-[minmax(0,1fr)_96px_128px_220px] items-center gap-4 border-b border-line bg-surface-2 px-4 py-2 text-xs font-medium text-muted sm:grid">
           <span>Name</span><span className="text-right">Size</span><span>Uploaded</span><span className="sr-only">Actions</span>
         </div>
 
@@ -216,8 +209,9 @@ export default function Files() {
           <ul className="divide-y divide-line">
             {visible.map((f) => (
               <FileRow key={f.file_id} f={f}
-                onDownload={() => download(f)} onShare={() => setShareFor(f)} onCopy={() => copyLink(f)}
-                onQr={() => setQrFor(f)} onDelete={() => setDeleteFor(f)} />
+                onDownload={() => download(f)} onShare={() => setShareFor(f)} onCopy={() => setLinkFor({ file: f, qr: false })}
+                onQr={() => setLinkFor({ file: f, qr: true })} onRevoke={() => setRevokeFor(f)}
+                onDelete={() => setDeleteFor(f)} />
             ))}
           </ul>
         )}
@@ -244,18 +238,19 @@ export default function Files() {
       )}
 
       {shareFor && <ShareModal file={shareFor} userId={userId} idToken={idToken} onClose={() => setShareFor(null)} />}
-      {qrFor && <QrModal file={qrFor} userId={userId} idToken={idToken} onClose={() => setQrFor(null)} />}
+      {linkFor && <LinkModal file={linkFor.file} qr={linkFor.qr} userId={userId} idToken={idToken} onClose={() => setLinkFor(null)} />}
+      {revokeFor && <RevokeModal file={revokeFor} userId={userId} idToken={idToken} onClose={() => setRevokeFor(null)} />}
       {deleteFor && <DeleteModal file={deleteFor} onConfirm={confirmDelete} onClose={() => setDeleteFor(null)} />}
     </div>
   );
 }
 
-function FileRow({ f, onDownload, onShare, onCopy, onQr, onDelete }) {
+function FileRow({ f, onDownload, onShare, onCopy, onQr, onRevoke, onDelete }) {
   const kind = fileKind(f.file_name, f.content_type);
   const Icon = KIND_ICON[kind];
   const pending = f.status && f.status !== 'READY';
   return (
-    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors hover:bg-surface-2 sm:grid-cols-[minmax(0,1fr)_96px_128px_188px]">
+    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors hover:bg-surface-2 sm:grid-cols-[minmax(0,1fr)_96px_128px_220px]">
       <div className="flex min-w-0 items-center gap-3">
         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-line bg-surface-2 text-muted">
           <Icon className="h-4 w-4" />
@@ -285,6 +280,7 @@ function FileRow({ f, onDownload, onShare, onCopy, onQr, onDelete }) {
             <button onClick={onShare} className="btn-icon" title="Share by email" aria-label={`Share ${f.file_name} by email`}><Mail className="h-4 w-4" /></button>
             <button onClick={onCopy} className="btn-icon" title="Copy link" aria-label={`Copy link to ${f.file_name}`}><Link2 className="h-4 w-4" /></button>
             <button onClick={onQr} className="btn-icon" title="QR code" aria-label={`QR code for ${f.file_name}`}><QrCode className="h-4 w-4" /></button>
+            <button onClick={onRevoke} className="btn-icon" title="Turn off links" aria-label={`Turn off links to ${f.file_name}`}><Link2Off className="h-4 w-4" /></button>
             <span className="mx-1 h-4 w-px bg-line" aria-hidden="true" />
             <button onClick={onDelete} className="btn-icon-danger" title="Delete" aria-label={`Delete ${f.file_name}`}><Trash2 className="h-4 w-4" /></button>
           </>
@@ -388,6 +384,7 @@ function ShareModal({ file, userId, idToken, onClose }) {
   const [emails, setEmails] = useState([]);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  const [expiry, setExpiry] = useState(DEFAULT_EXPIRY);
 
   const addEmail = (raw) => {
     const v = raw.trim().replace(/,$/, '');
@@ -403,8 +400,8 @@ function ShareModal({ file, userId, idToken, onClose }) {
     if (valid.length === 0) { toast.error('Add at least one recipient.'); return; }
     setBusy(true);
     try {
-      await filesApi.share(userId, file.file_id, idToken, valid);
-      toast.success(`Sent to ${valid.length} ${valid.length === 1 ? 'person' : 'people'}.`);
+      await filesApi.share(userId, file.file_id, idToken, valid, expiry);
+      toast.success(`Sent to ${valid.length} ${valid.length === 1 ? 'person' : 'people'}. ${expiryPhrase(expiry)}`);
       onClose();
     } catch (err) { toast.error(err); } finally { setBusy(false); }
   };
@@ -418,7 +415,7 @@ function ShareModal({ file, userId, idToken, onClose }) {
         </button>
       </>}>
       <p className="truncate text-sm font-medium" title={file.file_name}>{file.file_name}</p>
-      <p className="mt-1 text-sm text-muted">Each recipient gets an email with a download link that works for 1 hour.</p>
+      <p className="mt-1 text-sm text-muted">Each recipient gets an email with a download link.</p>
 
       <label className="label mt-5" htmlFor="share-emails">Recipients</label>
       <div className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-md border border-line-strong bg-surface px-2 py-1.5 focus-within:border-accent focus-within:ring-3 focus-within:ring-ring">
@@ -442,25 +439,55 @@ function ShareModal({ file, userId, idToken, onClose }) {
           onBlur={() => addEmail(draft)} />
       </div>
       <span className="hint">Press Enter or comma after each address.</span>
+
+      <ExpiryPicker id="share-expiry" value={expiry} onChange={setExpiry} />
     </Modal>
   );
 }
 
-function QrModal({ file, userId, idToken, onClose }) {
+// "The link works for 1 day." / "The link doesn't expire."
+function expiryPhrase(expiry) {
+  if (expiry === 'never') return 'The link doesn’t expire.';
+  const label = LINK_EXPIRY.find((o) => o.value === expiry)?.label || '';
+  return `The link works for ${label}.`;
+}
+
+function formatExpiresAt(expiresAt) {
+  if (!expiresAt) return 'Never expires';
+  return `Expires ${new Date(expiresAt * 1000).toLocaleString(undefined, {
+    day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit',
+  })}`;
+}
+
+function ExpiryPicker({ id, value, onChange }) {
+  return (
+    <div className="mt-5">
+      <label className="label" htmlFor={id}>Link expires after</label>
+      <select id={id} className="input h-9" value={value}
+        onChange={(e) => onChange(e.target.value === 'never' ? 'never' : Number(e.target.value))}>
+        {LINK_EXPIRY.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      {value === 'never' ? (
+        <p className="mt-2 flex items-start gap-1.5 text-xs text-danger">
+          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+          Anyone with this link can download the file until you delete it or turn its links off.
+        </p>
+      ) : (
+        <span className="hint">You can turn links off early from the file list.</span>
+      )}
+    </div>
+  );
+}
+
+// Copy link (qr=false) and QR code (qr=true): pick an expiry, then create the link.
+function LinkModal({ file, qr, userId, idToken, onClose }) {
   const toast = useToast();
-  const [url, setUrl] = useState(null);
-  const [error, setError] = useState(null);
+  const [expiry, setExpiry] = useState(DEFAULT_EXPIRY);
+  const [link, setLink] = useState(null); // { url, expiresAt }
+  const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    filesApi.qrLink(userId, file.file_id, idToken)
-      .then((r) => { if (alive) setUrl(r.short_url); })
-      .catch((err) => { if (alive) setError(err.message || 'Could not create a link.'); });
-    return () => { alive = false; };
-  }, [file.file_id, userId, idToken]);
-
-  const copy = async () => {
+  const copy = async (url) => {
     try {
       await navigator.clipboard.writeText(url);
       setCopied(true);
@@ -468,26 +495,99 @@ function QrModal({ file, userId, idToken, onClose }) {
     } catch (err) { toast.error(err); }
   };
 
+  const create = async () => {
+    setBusy(true);
+    try {
+      const r = await filesApi.qrLink(userId, file.file_id, idToken, expiry);
+      setLink({ url: r.short_url, expiresAt: r.expires_at });
+      if (!qr) await copy(r.short_url);
+    } catch (err) { toast.error(err); } finally { setBusy(false); }
+  };
+
   return (
-    <Modal onClose={onClose} title="Scan to download" icon={QrCode} width="max-w-sm"
+    <Modal onClose={onClose} title={qr ? 'Scan to download' : 'Copy link'} icon={qr ? QrCode : Link2}
+      width={qr ? 'max-w-sm' : 'max-w-md'}
       footer={<>
         <button className="btn-secondary" onClick={onClose}>Close</button>
-        <button className="btn-primary" onClick={copy} disabled={!url}>
-          {copied ? <><Check className="h-4 w-4" /> Copied</> : <><Copy className="h-4 w-4" /> Copy link</>}
+        {link ? (
+          <button className="btn-primary" onClick={() => copy(link.url)}>
+            {copied ? <><Check className="h-4 w-4" /> Copied</> : <><Copy className="h-4 w-4" /> Copy link</>}
+          </button>
+        ) : (
+          <button className="btn-primary" onClick={create} disabled={busy}>
+            {busy ? <Spinner />
+              : qr ? <><QrCode className="h-4 w-4" /> Create QR code</>
+                : <><Link2 className="h-4 w-4" /> Create &amp; copy link</>}
+          </button>
+        )}
+      </>}>
+      <p className={`truncate text-sm font-medium ${qr ? 'text-center' : ''}`} title={file.file_name}>{file.file_name}</p>
+
+      {qr && link && (
+        <div className="mt-4 flex justify-center">
+          {/* QR codes need dark-on-light to scan reliably, so the plate stays white in dark mode. */}
+          <div className="grid h-[248px] w-[248px] place-items-center rounded-md border border-line bg-white p-3">
+            <QRCodeSVG value={link.url} size={220} level="M" marginSize={1} />
+          </div>
+        </div>
+      )}
+
+      {!qr && link && (
+        <input readOnly className="input mt-4 h-9 font-mono text-xs" value={link.url}
+          onFocus={(e) => e.target.select()} aria-label="Download link" />
+      )}
+
+      {link ? (
+        <p className={`mt-3 flex items-center gap-1.5 text-xs text-muted ${qr ? 'justify-center' : ''}`}>
+          <Clock className="h-3.5 w-3.5" /> {formatExpiresAt(link.expiresAt)}
+          <span aria-hidden="true">·</span>
+          <button className="underline underline-offset-2 hover:text-fg" onClick={() => setLink(null)}>New link</button>
+        </p>
+      ) : (
+        <ExpiryPicker id="link-expiry" value={expiry} onChange={setExpiry} />
+      )}
+
+      <p className={`mt-4 text-xs text-muted ${qr ? 'text-center' : ''}`}>
+        Anyone with this link can download the file until it expires, you turn its links off, or you delete the file.
+      </p>
+    </Modal>
+  );
+}
+
+function RevokeModal({ file, userId, idToken, onClose }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+
+  const confirm = async () => {
+    setBusy(true);
+    try {
+      await filesApi.revokeLinks(userId, file.file_id, idToken);
+      toast.success(`Links to ${file.file_name} are turned off.`);
+      onClose();
+    } catch (err) { toast.error(err); setBusy(false); }
+  };
+
+  return (
+    <Modal onClose={busy ? () => {} : onClose} width="max-w-sm"
+      footer={<>
+        <button className="btn-secondary" onClick={onClose} disabled={busy} autoFocus>Cancel</button>
+        <button className="btn-danger" onClick={confirm} disabled={busy}>
+          {busy ? <Spinner /> : <><Link2Off className="h-4 w-4" /> Turn off links</>}
         </button>
       </>}>
-      <p className="truncate text-center text-sm font-medium" title={file.file_name}>{file.file_name}</p>
-      <div className="mt-4 flex justify-center">
-        {/* QR codes need dark-on-light to scan reliably, so the plate stays white in dark mode. */}
-        <div className="grid h-[248px] w-[248px] place-items-center rounded-md border border-line bg-white p-3">
-          {url && <QRCodeSVG value={url} size={220} level="M" marginSize={1} />}
-          {!url && !error && <Spinner className="text-neutral-400" />}
-          {error && <p className="px-4 text-center text-sm text-red-700">{error}</p>}
+      <div className="flex items-start gap-3.5">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-danger-soft text-danger">
+          <Link2Off className="h-4 w-4" />
+        </div>
+        <div className="min-w-0">
+          <h2 className="text-[15px] font-semibold">Turn off all links?</h2>
+          <p className="mt-1 text-sm text-muted">
+            Every link you've shared for <span className="break-all font-medium text-fg">{file.file_name}</span> (by
+            email, copied, or as a QR code) stops working now. The file stays in your account, and you can share new
+            links afterwards.
+          </p>
         </div>
       </div>
-      <p className="mt-4 text-center text-xs text-muted">
-        Anyone who scans this can download the file. The link expires in 1 hour, or as soon as you delete the file.
-      </p>
     </Modal>
   );
 }

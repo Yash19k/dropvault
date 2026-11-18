@@ -63,15 +63,33 @@ export const filesApi = {
   download: (userId, fileId, idToken) =>
     request('GET', `/users/${userId}/files/${fileId}/download`, { token: idToken }),
 
-  // short (~80 char) public link for QR codes; redirects to a fresh download
-  qrLink: (userId, fileId, idToken) =>
-    request('POST', `/users/${userId}/files/${fileId}/qr`, { token: idToken, body: {} }),
+  // Short (~80 char) public link for copy-link and QR codes; redirects to a
+  // fresh download. expiresIn: seconds (see LINK_EXPIRY) or 'never'.
+  qrLink: (userId, fileId, idToken, expiresIn) =>
+    request('POST', `/users/${userId}/files/${fileId}/qr`, {
+      token: idToken, body: { expires_in: expiresIn },
+    }),
+
+  // Turn off every link made so far for this file (email, copied and QR).
+  revokeLinks: (userId, fileId, idToken) =>
+    request('DELETE', `/users/${userId}/files/${fileId}/qr`, { token: idToken }),
 
   remove: (userId, fileId, idToken) =>
     request('DELETE', `/users/${userId}/files/${fileId}`, { token: idToken, body: {} }),
 
-  share: (userId, fileId, idToken, emails) =>
+  share: (userId, fileId, idToken, emails, expiresIn) =>
     request('POST', `/users/${userId}/files/${fileId}/share`, {
-      token: idToken, body: { share_with: emails },
+      token: idToken, body: { share_with: emails, expires_in: expiresIn },
     }),
 };
+
+// Link lifetimes offered in the UI; the API accepts exactly these.
+export const LINK_EXPIRY = [
+  { value: 900, label: '15 minutes' },
+  { value: 3600, label: '1 hour' },
+  { value: 21600, label: '6 hours' },
+  { value: 86400, label: '1 day' },
+  { value: 604800, label: '7 days' },
+  { value: 'never', label: 'Never' },
+];
+export const DEFAULT_EXPIRY = 3600;

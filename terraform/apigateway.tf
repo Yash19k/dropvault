@@ -155,6 +155,7 @@ resource "aws_api_gateway_deployment" "this" {
       [for r in module.route_auth : r.integration_id],
       [for c in module.cors_auth : c.integration_id],
       [module.route_qr_create.integration_id, module.route_qr_follow.integration_id,
+      module.route_qr_revoke.integration_id,
       module.cors_qr.integration_id],
     )))
   }

@@ -1,36 +1,37 @@
 #! /usr/bin/env python
 '''Short, scannable download links (for QR codes).
 
-  POST /v1/users/{user_id}/files/{file_id}/qr   (Bearer token, owner only)
-       -> {short_url, expires_at}
-  GET  /v1/d/{code}                              (public - what the QR opens)
-       -> 302 redirect to a fresh 5-minute presigned S3 download
+  POST   /v1/users/{user_id}/files/{file_id}/qr  (Bearer token, owner only)
+         body {expires_in: 900|3600|21600|86400|604800|"never"}  (default 3600)
+         -> {short_url, expires_at}   (expires_at is null for "never")
+  DELETE /v1/users/{user_id}/files/{file_id}/qr  (Bearer token, owner only)
+         -> revoke every link to the file made so far -> {links_revoked_at}
+  GET    /v1/d/{code}                             (public - what the QR opens)
+         -> 302 redirect to a fresh 5-minute presigned S3 download
 
 A presigned S3 URL is ~1,500 characters (it carries the Lambda's session
 token), which makes a QR code too dense to scan reliably. The short link is
-~80 characters. Link records live in the files table under file_id
-"QR#<code>" (no user_id attribute, so they never show up in file listings)
-and expire after LINK_TTL seconds. Deleting the file breaks its links.
+~80 characters. Link records are described in links.py. Deleting the file
+or revoking its links breaks them.
 '''
 
 import os
 import json
 import time
-import secrets
 import html
 import boto3
 from botocore.config import Config
 import auth
+import links
 import log
 
 LOGGER = log.setup_logging()
-LINK_TTL = int(os.getenv('QR_LINK_TTL', '3600'))   # how long a QR/short link works
-REDIRECT_TTL = 300                                  # presigned URL behind each scan
+REDIRECT_TTL = 300   # presigned URL behind each scan
 
 CORS_HEADERS = {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': '*'
 }
 
@@ -47,14 +48,6 @@ def s3_client(region):
         endpoint_url='https://s3.{0}.amazonaws.com'.format(region),
         config=Config(signature_version='s3v4', s3={'addressing_style': 'virtual'})
     )
-
-
-def public_base_url(event):
-    '''Base URL of this API as the outside world sees it.'''
-    if os.getenv('PUBLIC_API_URL'):
-        return os.environ['PUBLIC_API_URL'].rstrip('/')
-    ctx = event.get('requestContext') or {}
-    return 'https://{0}/{1}'.format(ctx.get('domainName'), ctx.get('stage')).rstrip('/')
 
 
 def json_response(status, body):
@@ -77,40 +70,65 @@ font-family:'IBM Plex Sans',Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1b
             'headers': {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'}}
 
 
-def create_link(event):
+def owned_file(event):
+    '''(user_id, file_item) for the caller's file, or (None, error response).'''
     user_id, _name, _email = auth.resolve_user((event.get('headers') or {}).get('Authorization'))
     if not user_id:
-        return json_response(401, {'message': 'Unauthorized'})
+        return None, json_response(401, {'message': 'Unauthorized'})
     parts = event['path'].split('/')          # ['', 'v1', 'users', uid, 'files', fid, 'qr']
     if parts[3] != user_id:
-        return json_response(401, {'message': 'User not authorized to perform this action'})
-    file_id = parts[5]
-    item = table().get_item(Key={'file_id': file_id}).get('Item')
+        return None, json_response(401, {'message': 'User not authorized to perform this action'})
+    item = table().get_item(Key={'file_id': parts[5]}).get('Item')
     if not item or item.get('user_id') != user_id:
-        return json_response(404, {'error_message': 'File not found'})
+        return None, json_response(404, {'error_message': 'File not found'})
+    return user_id, item
 
-    code = secrets.token_urlsafe(9)           # 12 URL-safe chars, ~72 bits of entropy
-    expires_at = int(time.time()) + LINK_TTL
-    table().put_item(Item={
-        'file_id': 'QR#' + code, 'kind': 'qr_link',
-        'target_file_id': file_id, 'owner_id': user_id,
-        'expires_at': expires_at, 'ttl': expires_at,
-    })
-    return json_response(201, {'short_url': '{0}/v1/d/{1}'.format(public_base_url(event), code),
-                               'expires_at': expires_at})
+
+def create_link(event):
+    try:
+        body = json.loads(event.get('body') or '{}') or {}
+    except ValueError:
+        return json_response(400, {'message': 'Body must be JSON'})
+    ttl, error = links.parse_expires_in(body.get('expires_in'))
+    if error:
+        return json_response(400, {'message': error})
+    user_id, item = owned_file(event)
+    if not user_id:
+        return item
+    short_url, expires_at = links.create(table(), event, item['file_id'], user_id, ttl)
+    return json_response(201, {'short_url': short_url, 'expires_at': expires_at})
+
+
+def revoke_links(event):
+    user_id, item = owned_file(event)
+    if not user_id:
+        return item
+    revoked_at = int(time.time() * 1000)
+    table().update_item(Key={'file_id': item['file_id']},
+                        UpdateExpression='SET links_revoked_at = :t',
+                        ExpressionAttributeValues={':t': revoked_at})
+    return json_response(200, {'file_id': item['file_id'], 'links_revoked_at': revoked_at})
 
 
 def follow_link(event):
     code = event['path'].rstrip('/').split('/')[-1]
     link = table().get_item(Key={'file_id': 'QR#' + code}).get('Item') if code else None
-    if not link or int(link.get('expires_at', 0)) < time.time():
-        return html_page(404, 'Link expired',
-                         'This download link has expired or is invalid. '
-                         'Ask the person who shared it for a new QR code.')
+    if not link:
+        return html_page(404, 'Link not found',
+                         'This download link is invalid or has expired. '
+                         'Ask the person who shared it for a new one.')
+    if 'expires_at' in link and int(link['expires_at']) < time.time():
+        return html_page(410, 'Link expired',
+                         'This link expired on {0}. Ask the person who shared it for a new one.'
+                         .format(links.format_utc(link['expires_at'])))
     item = table().get_item(Key={'file_id': link['target_file_id']}).get('Item')
     if not item or item.get('user_id') != link['owner_id'] or item.get('status', 'READY') != 'READY':
         return html_page(404, 'File not available',
                          'The file behind this link has been deleted or is no longer available.')
+    if int(link.get('created_at', 0)) <= int(item.get('links_revoked_at', -1)):
+        return html_page(410, 'Link turned off',
+                         'The person who shared this file has turned this link off. '
+                         'Ask them for a new one if you still need it.')
     key = '{0}/{1}/{2}'.format(item['user_id'], item['file_id'], item['file_name'])
     url = s3_client(os.getenv('REGION')).generate_presigned_url(
         'get_object',
@@ -128,8 +146,11 @@ def follow_link(event):
 def lambda_handler(event, _):
     '''Lambda entrypoint.'''
     try:
-        if event.get('httpMethod') == 'GET':
+        method = event.get('httpMethod')
+        if method == 'GET':
             return follow_link(event)
+        if method == 'DELETE':
+            return revoke_links(event)
         return create_link(event)
     except Exception as error:  # pylint: disable=broad-except
         LOGGER.error({'error_message': '{}'.format(error)})
