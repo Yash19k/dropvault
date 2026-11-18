@@ -1,8 +1,8 @@
 <h1 align="center">DropVault</h1>
 
 <p align="center">
-  Share files with links that expire. Serverless on AWS: upload up to 5 GB, share by email or QR code,
-  and every link stops working after an hour.
+  Share files with links that expire. Serverless on AWS: upload up to 5 GB, share by email, link or
+  QR code, choose how long each link works, and turn links off at any time.
 </p>
 
 <p align="center">
@@ -20,10 +20,13 @@
 
 - **Direct-to-S3 uploads** up to 5 GB per file. The browser uploads straight to S3 with a presigned URL,
   with live progress. Nothing large passes through a server.
-- **Expiring links.** Downloads use presigned URLs that work for 1 hour.
-- **Share by email.** Send a file to several people; each gets an email with a download link (Amazon SES).
-- **QR codes.** Every file has a short, scannable link that redirects to a fresh download and stops
-  working after 1 hour, or as soon as the file is deleted.
+- **You choose how long links work:** 15 minutes, 1 hour (default), 6 hours, 1 day, 7 days or never.
+- **Share by email, link or QR code.** Email a file to several people (Amazon SES), copy a short link,
+  or show a scannable QR code. All three use the same short link, which redirects to a fresh download.
+- **Turn links off.** One click stops every link shared for a file, without deleting the file.
+  Deleting the file also stops its links.
+- **Clear dead-link pages.** Someone opening an expired or turned-off link sees a short page that says
+  so (and when it expired), not a raw storage error.
 - **Simple accounts.** Name, email and password. Sessions renew automatically for up to 30 days.
 - **Light and dark mode**, following your system setting or chosen manually.
 - **Encryption at rest:** SSE-S3 by default, or one KMS key for the app, or one KMS key **per user**.
@@ -71,9 +74,9 @@ with the caller's token. By default that's the built-in `auth-service` on the sa
 │   ├── complete-upload/       mark an upload READY and record its real size
 │   ├── get-user-files/        list the caller's files
 │   ├── download-file/         presigned GET URL (1 hour)
-│   ├── share-file/            email a download link via SES
+│   ├── share-file/            email a short download link via SES
 │   ├── delete-user-file/      delete the S3 object and its record
-│   └── qr-link/               short links for QR codes + the public redirect
+│   └── qr-link/               short links (create, turn off) + the public redirect
 ├── terraform/                 all AWS infrastructure
 │   ├── deploy.sh              terraform apply → build web app → publish to Amplify / S3
 │   ├── auth.tf  qr.tf         the auth and QR Lambdas, their routes and the users table
@@ -174,10 +177,14 @@ saves the token and IDs for you.
 | `PUT {upload_url}` (straight to S3) | the file bytes, same `Content-Type`, plus `upload_headers` |
 | `POST /users/{user_id}/files/{file_id}/complete` | `{file_id, size, status: "READY"}` |
 | `GET /users/{user_id}/files/{file_id}/download` | `{download_url}` (1 hour) |
-| `POST /users/{user_id}/files/{file_id}/share` `{share_with: [emails]}` | `201`, emails a 1-hour link |
-| `POST /users/{user_id}/files/{file_id}/qr` | `201 {short_url, expires_at}` |
-| `GET /d/{code}` (public) | `302` to a fresh download, or a "link expired" page |
+| `POST /users/{user_id}/files/{file_id}/share` `{share_with: [emails], expires_in}` | `201 {file_id, file_name, status, expires_at}`, emails a short link |
+| `POST /users/{user_id}/files/{file_id}/qr` `{expires_in}` | `201 {short_url, expires_at}` |
+| `DELETE /users/{user_id}/files/{file_id}/qr` | `{file_id, links_revoked_at}`, turns off every link to the file made so far |
+| `GET /d/{code}` (public) | `302` to a fresh download, or a "not found", "expired" or "turned off" page |
 | `DELETE /users/{user_id}/files/{file_id}` | `{file_status: "DELETED"}` |
+
+`expires_in` is one of `900`, `3600`, `21600`, `86400`, `604800` (seconds) or `"never"`. It defaults to
+`3600`. `expires_at` is a Unix timestamp, or `null` for links that never expire.
 
 Files are stored at `s3://<bucket>/{user_id}/{file_id}/{file_name}`.
 
@@ -191,9 +198,15 @@ a tab wakes from sleep.
 **Uploads.** The app asks the API for a presigned PUT URL, uploads the file straight to S3 with progress,
 then marks it complete. S3 accepts up to 5 GB in a single PUT, and the app checks this before uploading.
 
-**QR links.** A presigned S3 URL is about 1,500 characters, which makes a QR code too dense to scan
-reliably. `qr-link` stores a 12-character code in DynamoDB instead, so the QR holds a ~80-character link.
-Each scan gets a fresh 5-minute download URL. DynamoDB TTL deletes expired link records.
+**Short links.** Email shares, copied links and QR codes all use the same short link. A presigned S3 URL
+is about 1,500 characters (too dense for a QR code), and it stops working when the Lambda's temporary
+credentials expire, after a few hours at most. So the app stores a 12-character code in DynamoDB instead
+(`links.py`, shared by `qr-link` and `share-file`), and each visit to `/d/{code}` gets a fresh 5-minute
+download URL. This is what makes long and never-expiring links work.
+
+Each link record keeps its creation time and, unless it never expires, an expiry time that DynamoDB TTL
+uses to delete it. Turning a file's links off stamps `links_revoked_at` on the file record, and any link
+created before that moment stops working. New links made afterwards work as normal.
 
 **Encryption (`kms_mode`).** `s3` uses SSE-S3 (AES-256, free). `shared` sets one customer-managed KMS
 key as the bucket default (about $1/month). `per_user` creates one KMS key per user on their first
@@ -208,7 +221,10 @@ about $1 per user per month.
 
 ## Security notes
 
-- Every bucket is private. Files are only ever reached through presigned URLs that expire.
+- Every bucket is private. Files are only ever reached through presigned URLs that expire within
+  5 minutes (shared links) or 1 hour (your own downloads).
+- A link set to **never** expire lets anyone who has it download the file until you turn its links off
+  or delete the file. The app warns about this when you pick it.
 - File routes check the token on every request and require the path `user_id` to match it.
 - Sign-up is intentionally simple: there's no email verification, MFA or rate limiting on login.
   For production use, add those or point `auth_endpoint` at a managed auth service.
@@ -218,8 +234,9 @@ about $1 per user per month.
 ## Roadmap
 
 - [ ] Multipart uploads (files over 5 GB, resumable uploads)
-- [ ] Revoke a shared link before it expires
-- [ ] Custom link lifetimes
+- [x] Turn shared links off before they expire
+- [x] Choose how long each link works
+- [ ] Turn off a single link instead of all of a file's links
 - [ ] Custom domain for the web app
 
 ## License
