@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { AlertTriangle, Info } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Info } from 'lucide-react';
 import AuthShell from '../components/AuthShell';
 import { Field, PasswordField, Spinner } from '../components/ui';
 import { useToast } from '../components/Toast';
@@ -32,9 +32,15 @@ export default function Login() {
 
   return (
     <AuthShell
-      title="Sign in"
-      subtitle="Welcome back. Sign in to manage your files."
+      eyebrow="Welcome back"
+      title="Sign in to DropVault"
+      subtitle="Manage your files, see who downloaded what, and turn links off."
       footer={<>New to DropVault? <Link to="/signup" className="link">Create an account</Link></>}
+      aside={{
+        eyebrow: 'Your files, on your terms',
+        title: 'Your links are still on the clock.',
+        text: 'Check who has downloaded what, make new links, or turn old ones off. An unfinished upload resumes where it stopped when you add the same file again.',
+      }}
     >
       {!isConfigured() && (
         <div className="mb-5 flex items-start gap-2.5 rounded-md border border-line bg-surface-2 p-3 text-sm text-muted">
@@ -53,8 +59,8 @@ export default function Login() {
           placeholder="you@example.com" autoComplete="email" autoFocus required />
         <PasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)}
           autoComplete="current-password" required />
-        <button className="btn-primary h-10 w-full" disabled={busy}>
-          {busy ? <Spinner /> : 'Sign in'}
+        <button className="btn-primary group mt-2 h-11 w-full text-[15px] shadow-lg shadow-accent/25" disabled={busy}>
+          {busy ? <Spinner /> : <>Sign in <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" /></>}
         </button>
       </form>
     </AuthShell>
