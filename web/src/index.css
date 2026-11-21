@@ -27,6 +27,14 @@
   --warning-soft: #fdf2e2;
   --ring: rgb(14 107 94 / 0.25);
   --shadow-color: 24 24 20;
+  /* Landing page: soft accent glow and the deep-teal statement band */
+  --glow: rgb(14 107 94 / 0.16);
+  --band: #0c3b35;
+  --band-2: #082a26;
+  --band-fg: #eef7f4;
+  --band-muted: rgb(238 247 244 / 0.68);
+  --band-line: rgb(238 247 244 / 0.12);
+  --band-accent: #6fd8c4;
   color-scheme: light;
 }
 
@@ -51,6 +59,13 @@
   --warning-soft: rgb(242 179 71 / 0.12);
   --ring: rgb(66 184 162 / 0.35);
   --shadow-color: 0 0 0;
+  --glow: rgb(66 184 162 / 0.14);
+  --band: #11302b;
+  --band-2: #0b1f1c;
+  --band-fg: #eef7f4;
+  --band-muted: rgb(238 247 244 / 0.62);
+  --band-line: rgb(238 247 244 / 0.1);
+  --band-accent: #6fd8c4;
   color-scheme: dark;
 }
 
@@ -74,6 +89,12 @@
   --color-warning: var(--warning);
   --color-warning-soft: var(--warning-soft);
   --color-ring: var(--ring);
+  --color-band: var(--band);
+  --color-band-2: var(--band-2);
+  --color-band-fg: var(--band-fg);
+  --color-band-muted: var(--band-muted);
+  --color-band-line: var(--band-line);
+  --color-band-accent: var(--band-accent);
 
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
@@ -123,4 +144,74 @@
   .btn-icon-danger { @apply hover:bg-danger-soft hover:text-danger; }
 
   .link { @apply font-medium text-accent underline-offset-4 hover:underline; }
+
+  /* ---- Landing page ---------------------------------------------------- */
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, var(--line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+  .bg-grid-band {
+    background-image:
+      linear-gradient(to right, var(--band-line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--band-line) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+  .mask-fade-b { mask-image: radial-gradient(ellipse 75% 70% at 50% 0%, #000 35%, transparent 100%); }
+  .mask-fade-c { mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, #000 20%, transparent 100%); }
+  .glow { background: radial-gradient(closest-side, var(--glow), transparent); }
+
+  /* Small selectable pill used by the landing page's demos */
+  .chip {
+    @apply inline-flex h-7 items-center justify-center rounded-md border border-line bg-surface px-2.5 text-xs font-medium text-muted
+           transition-colors hover:border-line-strong hover:text-fg
+           focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring;
+  }
+  .chip[aria-pressed="true"], .chip[data-on] { @apply border-accent bg-accent-soft text-accent; }
+
+  /* Scroll-in reveal: <Reveal> sets data-shown when the element enters the viewport */
+  .reveal {
+    opacity: 0;
+    transform: translateY(18px);
+    transition: opacity 0.7s cubic-bezier(0.2, 0.7, 0.2, 1), transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+    transition-delay: var(--reveal-delay, 0ms);
+  }
+  .reveal[data-shown] { opacity: 1; transform: none; }
+}
+
+@theme {
+  --animate-drain: drain 7s cubic-bezier(0.5, 0, 0.6, 1) infinite;
+  --animate-expire-word: expire-word 7s linear infinite;
+  --animate-step-in: step-in 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-scan: scan 2.6s ease-in-out infinite;
+  --animate-caret: caret 1s steps(1) infinite;
+  --animate-pulse-soft: pulse-soft 1.2s ease-in-out infinite;
+
+  /* the underline under "expire." refills, then runs down like a link's clock */
+  @keyframes drain {
+    0% { transform: scaleX(0); }
+    7% { transform: scaleX(1); }
+    86%, 100% { transform: scaleX(0); }
+  }
+  /* ...and the word fades for a moment once it has run out */
+  @keyframes expire-word {
+    0%, 84% { opacity: 1; }
+    88%, 97% { opacity: 0.28; }
+    100% { opacity: 1; }
+  }
+  @keyframes step-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes scan {
+    0%, 100% { top: 8%; }
+    50% { top: 88%; }
+  }
+  @keyframes caret { 50% { opacity: 0; } }
+  @keyframes pulse-soft { 50% { opacity: 0.45; } }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; transition: none; }
 }

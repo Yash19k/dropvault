@@ -1,42 +1,33 @@
 import { Link } from 'react-router-dom';
-import {
-  ArrowRight, Download, Mail, Link2, QrCode, FileText, FileArchive, Video, Image,
-  UploadCloud, Clock, Lock, ShieldCheck, Github,
-} from 'lucide-react';
-import { Logo } from '../components/ui';
+import { ArrowRight, Github, RotateCcw, ShieldCheck, Scale } from 'lucide-react';
+import { Logo, LogoMark } from '../components/ui';
 import { ThemeToggle } from '../theme';
 import { useAuth } from '../context/AuthContext';
 import { APP_NAME, REPO_URL } from '../brand';
+import HeroDemo from './landing/HeroDemo';
+import Features from './landing/Features';
+import ClockBand from './landing/ClockBand';
+import { Reveal } from './landing/motion';
 
-const steps = [
-  { n: '01', title: 'Upload', text: 'Drag files in or pick them from your computer. They go straight to private storage. Big files upload in parts you can pause and resume.' },
-  { n: '02', title: 'Share', text: 'Email a link, copy it, or show a QR code that someone can scan from across the table.' },
-  { n: '03', title: 'It expires', text: 'Pick how long a link works and how many downloads it allows. See who downloaded it, and turn links off any time.' },
-];
-
-const features = [
-  { icon: UploadCloud, title: 'Direct uploads', text: 'Files go from your browser straight to storage, so large uploads don’t stall on a server.' },
-  { icon: Mail, title: 'Email sharing', text: 'Send a file to several people at once. Each gets a plain email with a download link.' },
-  { icon: QrCode, title: 'QR codes', text: 'Every file has a short, scannable link. Handy for moving a file from laptop to phone.' },
-  { icon: Clock, title: 'Links that expire', text: 'Choose 15 minutes, an hour, a week or never, and turn links off whenever you like.' },
-  { icon: Lock, title: 'Private by default', text: 'Your files are only visible to you. There are no public folders to misconfigure.' },
-  { icon: ShieldCheck, title: 'Encrypted at rest', text: 'Files are stored encrypted on Amazon S3, in a bucket only the app can reach.' },
-];
-
-const previewFiles = [
-  { icon: FileText, name: 'Q3-financial-report.pdf', size: '2.4 MB', date: 'Nov 17' },
-  { icon: FileArchive, name: 'site-photos-final.zip', size: '418 MB', date: 'Nov 16' },
-  { icon: Video, name: 'product-demo.mp4', size: '1.2 GB', date: 'Nov 14' },
-  { icon: Image, name: 'floor-plan-v3.png', size: '3.1 MB', date: 'Nov 12' },
+const STACK = ['Amazon S3', 'AWS Lambda', 'API Gateway', 'DynamoDB', 'KMS', 'SES', 'Terraform'];
+const PROOF = [
+  { icon: RotateCcw, text: 'Resumable uploads' },
+  { icon: ShieldCheck, text: 'Encrypted at rest' },
+  { icon: Scale, text: 'MIT licensed' },
 ];
 
 export default function Landing() {
   const { isAuthenticated } = useAuth();
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-line">
+    <div className="min-h-screen overflow-x-clip">
+      <header className="sticky top-0 z-40 border-b border-line/70 bg-canvas/75 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
           <Link to="/" aria-label={`${APP_NAME} home`}><Logo /></Link>
+          <nav className="hidden items-center gap-7 text-sm text-muted md:flex" aria-label="Page">
+            <a href="#features" className="transition-colors hover:text-fg">Features</a>
+            <a href="#lifetime" className="transition-colors hover:text-fg">How links end</a>
+            <a href={REPO_URL} target="_blank" rel="noreferrer" className="transition-colors hover:text-fg">GitHub</a>
+          </nav>
           <div className="flex items-center gap-2 sm:gap-3">
             <div className="hidden sm:block"><ThemeToggle /></div>
             {isAuthenticated ? (
@@ -53,91 +44,116 @@ export default function Landing() {
 
       <main>
         {/* Hero */}
-        <section className="mx-auto grid max-w-6xl items-center gap-12 px-5 py-16 lg:grid-cols-[1fr_1.05fr] lg:py-24">
-          <div>
-            <p className="font-mono text-xs uppercase tracking-[0.14em] text-accent">File sharing on AWS</p>
-            <h1 className="mt-4 max-w-xl text-[2.6rem] font-semibold leading-[1.08] tracking-tight sm:text-5xl">
-              Share files with links that expire.
-            </h1>
-            <p className="mt-5 max-w-lg text-[17px] leading-relaxed text-muted">
-              Upload big files, send them by email or QR code, and choose how long every link works and how many downloads it allows.
-              Nothing stays out there longer than it needs to.
-            </p>
-            <div className="mt-8 flex flex-wrap gap-3">
-              {isAuthenticated ? (
-                <Link to="/app" className="btn-primary h-10 px-5">Go to your files <ArrowRight className="h-4 w-4" /></Link>
-              ) : (
-                <>
-                  <Link to="/signup" className="btn-primary h-10 px-5">Create a free account</Link>
-                  <Link to="/login" className="btn-secondary h-10 px-5">Sign in</Link>
-                </>
-              )}
+        <section className="relative isolate">
+          <div aria-hidden="true" className="bg-grid mask-fade-b absolute inset-0 -z-10 opacity-70" />
+          <div className="mx-auto grid max-w-6xl items-center gap-16 px-5 pb-28 pt-14 sm:pt-20 lg:grid-cols-[1fr_1.02fr] lg:gap-12 lg:pb-32 lg:pt-24">
+            <div>
+              <a href={REPO_URL} target="_blank" rel="noreferrer"
+                className="group inline-flex items-center gap-2 rounded-full border border-line bg-surface/80 py-1 pl-1 pr-3 text-xs text-muted shadow-xs backdrop-blur transition-colors hover:border-line-strong hover:text-fg">
+                <span className="rounded-full bg-accent-soft px-2 py-0.5 font-medium text-accent">Open source</span>
+                Serverless file sharing on AWS
+                <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+              </a>
+
+              <h1 className="mt-6 max-w-xl text-[2.75rem] font-semibold leading-[1.02] tracking-[-0.035em] sm:text-6xl lg:text-[4.1rem]">
+                Share files with links that{' '}
+                <span className="relative inline-block whitespace-nowrap text-accent">
+                  <span className="inline-block animate-expire-word motion-reduce:animate-none">expire.</span>
+                  <span aria-hidden="true"
+                    className="absolute -bottom-1.5 left-0 h-[0.085em] w-[calc(100%-0.3em)] origin-left animate-drain rounded-full bg-accent motion-reduce:animate-none" />
+                </span>
+              </h1>
+
+              <p className="mt-7 max-w-lg text-lg leading-relaxed text-muted">
+                Upload big files, send them by email, link or QR code, and decide how long each link works and how many
+                downloads it gets. When it’s done, it’s gone.
+              </p>
+
+              <div className="mt-9 flex flex-wrap gap-3">
+                {isAuthenticated ? (
+                  <Link to="/app" className="btn-primary h-11 px-5 text-[15px] shadow-lg shadow-accent/25">
+                    Go to your files <ArrowRight className="h-4 w-4" />
+                  </Link>
+                ) : (
+                  <>
+                    <Link to="/signup" className="btn-primary group h-11 px-5 text-[15px] shadow-lg shadow-accent/25">
+                      Create a free account <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                    </Link>
+                    <Link to="/login" className="btn-secondary h-11 px-5 text-[15px]">Sign in</Link>
+                  </>
+                )}
+              </div>
+
+              <ul className="mt-9 flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted">
+                {PROOF.map(({ icon: Icon, text }) => (
+                  <li key={text} className="flex items-center gap-2"><Icon className="h-4 w-4 text-accent" /> {text}</li>
+                ))}
+              </ul>
             </div>
-            <dl className="mt-10 grid max-w-md grid-cols-3 gap-6 border-t border-line pt-6">
-              {[['Resumable', 'big uploads'], ['15m–never', 'link lifetime'], ['AES-256', 'encryption']].map(([v, k]) => (
-                <div key={k}>
-                  <dt className="sr-only">{k}</dt>
-                  <dd className="font-mono text-lg font-medium">{v}</dd>
-                  <dd className="mt-0.5 text-xs text-muted">{k}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
 
-          <ProductPreview />
-        </section>
-
-        {/* How it works */}
-        <section className="border-t border-line bg-surface">
-          <div className="mx-auto max-w-6xl px-5 py-16 lg:py-20">
-            <h2 className="text-2xl font-semibold tracking-tight">How it works</h2>
-            <ol className="mt-10 grid gap-8 md:grid-cols-3 md:gap-10">
-              {steps.map((s) => (
-                <li key={s.n} className="border-t-2 border-fg pt-5">
-                  <span className="font-mono text-xs text-muted">{s.n}</span>
-                  <h3 className="mt-2 text-base font-semibold">{s.title}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-muted">{s.text}</p>
-                </li>
-              ))}
-            </ol>
+            <HeroDemo />
           </div>
         </section>
+
+        {/* What it runs on */}
+        <div className="border-y border-line bg-surface/70">
+          <div className="mx-auto flex max-w-6xl flex-col items-center gap-3 px-5 py-6 md:flex-row md:justify-between">
+            <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-subtle">Runs serverless on</span>
+            <ul className="flex flex-wrap justify-center gap-x-7 gap-y-2 text-sm font-medium text-muted">
+              {STACK.map((s) => <li key={s}>{s}</li>)}
+            </ul>
+          </div>
+        </div>
 
         {/* Features */}
-        <section className="border-t border-line">
-          <div className="mx-auto max-w-6xl px-5 py-16 lg:py-20">
-            <div className="max-w-xl">
-              <h2 className="text-2xl font-semibold tracking-tight">Built for sending things, not storing them forever</h2>
-              <p className="mt-3 text-muted">The parts that matter when you need to get a file to someone quickly and safely.</p>
-            </div>
-            <div className="mt-12 grid gap-x-10 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
-              {features.map((f) => (
-                <div key={f.title} className="flex gap-4">
-                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-line bg-surface text-accent">
-                    <f.icon className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <h3 className="text-[15px] font-semibold">{f.title}</h3>
-                    <p className="mt-1.5 text-sm leading-relaxed text-muted">{f.text}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
+        <section id="features" className="mx-auto max-w-6xl scroll-mt-16 px-5 py-20 lg:py-28">
+          <Reveal className="max-w-2xl">
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-accent">Features</p>
+            <h2 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">
+              Built for sending things, not storing them forever.
+            </h2>
+            <p className="mt-4 text-[17px] leading-relaxed text-muted">
+              The parts that matter when you need to get a file to someone quickly and safely. Go on, click around.
+            </p>
+          </Reveal>
+          <div className="mt-12">
+            <Features />
           </div>
         </section>
 
+        <div id="lifetime" className="scroll-mt-16">
+          <ClockBand />
+        </div>
+
         {/* CTA */}
-        {!isAuthenticated && (
-          <section className="border-t border-line bg-surface">
-            <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-6 px-5 py-14 md:flex-row md:items-center">
-              <div>
-                <h2 className="text-xl font-semibold tracking-tight">Send your first file in under a minute.</h2>
-                <p className="mt-1.5 text-sm text-muted">Name, email and a password. That’s the whole sign-up.</p>
+        <section className="mx-auto max-w-6xl px-5 py-20 lg:py-28">
+          <Reveal className="relative isolate overflow-hidden rounded-2xl bg-accent px-6 py-14 text-accent-fg shadow-lg sm:px-12 lg:py-16">
+            <div aria-hidden="true"
+              className="mask-fade-c absolute inset-0 -z-10 opacity-20 [background-image:linear-gradient(to_right,currentColor_1px,transparent_1px),linear-gradient(to_bottom,currentColor_1px,transparent_1px)] [background-size:44px_44px]" />
+            <LogoMark className="pointer-events-none absolute -bottom-10 -right-8 -z-10 h-56 w-56 rotate-[-8deg] opacity-15 sm:h-72 sm:w-72" />
+            <div className="flex flex-col items-start justify-between gap-8 lg:flex-row lg:items-center">
+              <div className="max-w-xl">
+                <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+                  {isAuthenticated ? 'Your files are waiting.' : 'Send your first file in under a minute.'}
+                </h2>
+                <p className="mt-3 text-[17px] opacity-80">
+                  {isAuthenticated ? 'Upload something new or check who downloaded what.' : 'Name, email and a password. That’s the whole sign-up.'}
+                </p>
               </div>
-              <Link to="/signup" className="btn-primary h-10 px-5">Create a free account <ArrowRight className="h-4 w-4" /></Link>
+              <div className="flex flex-wrap gap-3">
+                <Link to={isAuthenticated ? '/app' : '/signup'}
+                  className="group inline-flex h-11 items-center gap-2 rounded-md bg-accent-fg px-5 text-[15px] font-medium text-accent shadow-lg transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-accent-fg/40">
+                  {isAuthenticated ? 'Go to your files' : 'Create a free account'}
+                  <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                </Link>
+                <a href={REPO_URL} target="_blank" rel="noreferrer"
+                  className="inline-flex h-11 items-center gap-2 rounded-md border border-current/30 px-5 text-[15px] font-medium transition-colors hover:bg-current/10 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-accent-fg/40">
+                  <Github className="h-4 w-4" /> View the source
+                </a>
+              </div>
             </div>
-          </section>
-        )}
+          </Reveal>
+        </section>
       </main>
 
       <footer className="border-t border-line">
@@ -156,77 +172,4 @@ export default function Landing() {
       </footer>
     </div>
   );
-}
-
-// A static, to-scale picture of the real file screen (no stock art, no blobs).
-function ProductPreview() {
-  return (
-    <div className="relative sm:mb-8 lg:mb-0" aria-hidden="true">
-      <div className="panel overflow-hidden shadow-lg">
-        <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <div>
-            <div className="text-sm font-semibold">All files</div>
-            <div className="mt-0.5 font-mono text-[11px] text-muted">4 files · 1.6 GB</div>
-          </div>
-          <span className="btn-primary pointer-events-none h-8 px-3 text-xs">Upload</span>
-        </div>
-        <ul className="divide-y divide-line">
-          {previewFiles.map((f, i) => (
-            <li key={f.name} className={`flex items-center gap-3 px-4 py-3 ${i === 1 ? 'bg-surface-2' : ''}`}>
-              <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-line bg-surface-2 text-muted">
-                <f.icon className="h-3.5 w-3.5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] font-medium">{f.name}</div>
-                <div className="font-mono text-[11px] text-subtle">{f.size} · {f.date}</div>
-              </div>
-              <div className="hidden items-center gap-0.5 text-muted sm:flex">
-                {[Download, Mail, Link2, QrCode].map((I, k) => (
-                  <span key={k} className={`grid h-7 w-7 place-items-center rounded ${i === 1 && k === 3 ? 'bg-line text-fg' : ''}`}>
-                    <I className="h-3.5 w-3.5" />
-                  </span>
-                ))}
-              </div>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      {/* QR popover anchored to the highlighted row */}
-      <div className="panel absolute -bottom-8 -right-4 hidden w-52 p-3 shadow-lg sm:block">
-        <div className="flex items-center gap-2 text-xs font-medium"><QrCode className="h-3.5 w-3.5 text-muted" /> Scan to download</div>
-        <div className="mt-2.5 rounded border border-line bg-white p-2">
-          <FakeQr />
-        </div>
-        <div className="mt-2 flex items-center gap-1.5 font-mono text-[11px] text-muted">
-          <Clock className="h-3 w-3" /> Expires in 59 min
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Decorative QR-like grid (deterministic, not a real code).
-function FakeQr() {
-  const n = 25;
-  const cells = [];
-  const finder = (x, y) => [[0, 0], [n - 7, 0], [0, n - 7]].some(([fx, fy]) => x >= fx && x < fx + 7 && y >= fy && y < fy + 7);
-  const finderOn = (x, y) => {
-    for (const [fx, fy] of [[0, 0], [n - 7, 0], [0, n - 7]]) {
-      const dx = x - fx; const dy = y - fy;
-      if (dx >= 0 && dx < 7 && dy >= 0 && dy < 7) {
-        return dx === 0 || dx === 6 || dy === 0 || dy === 6 || (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4);
-      }
-    }
-    return false;
-  };
-  for (let y = 0; y < n; y += 1) {
-    for (let x = 0; x < n; x += 1) {
-      const quiet = (x === 7 || y === 7 || x === n - 8) && (finder(x - 1, y) || finder(x, y - 1) || finder(x + 1, y));
-      const h = Math.imul(x * 374761393 + y * 668265263, 1274126177) >>> 0;
-      const on = finder(x, y) ? finderOn(x, y) : !quiet && (h % 100) < 47;
-      if (on) cells.push(<rect key={`${x}-${y}`} x={x} y={y} width="1" height="1" />);
-    }
-  }
-  return <svg viewBox={`0 0 ${n} ${n}`} className="block h-auto w-full" fill="#1b1b18" shapeRendering="crispEdges">{cells}</svg>;
 }
