@@ -101,6 +101,12 @@ def create(table, event, file_id, owner_id, ttl, channel='link', max_downloads=N
     return link_url(event, code), expires_at
 
 
+def discard(table, url):
+    '''Remove a link create() made that was never handed out (its email
+       couldn't be sent), so it isn't listed as shared with anyone.'''
+    table.delete_item(Key={'file_id': 'QR#' + url.rstrip('/').rsplit('/', 1)[-1]})
+
+
 def status(link, file_item, now=None):
     '''active | revoked | expired | limit_reached | file_missing'''
     now = time.time() if now is None else now

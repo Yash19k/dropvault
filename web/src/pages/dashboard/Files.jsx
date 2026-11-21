@@ -459,6 +459,14 @@ function ShareModal({ file, userId, idToken, onClose }) {
   const [busy, setBusy] = useState(false);
   const [expiry, setExpiry] = useState(DEFAULT_EXPIRY);
   const [limit, setLimit] = useState(null);
+  const [notSent, setNotSent] = useState(null); // [{email, reason}] the last send couldn't email
+
+  // Keep the dialog open on the addresses that weren't emailed, with the reason.
+  const showNotSent = (failed) => {
+    setEmails(failed.map((f) => f.email));
+    setDraft('');
+    setNotSent(failed);
+  };
 
   const addEmail = (raw) => {
     const v = raw.trim().replace(/,$/, '');
@@ -475,11 +483,17 @@ function ShareModal({ file, userId, idToken, onClose }) {
     if (valid.length === 0) { toast.error('Add at least one recipient.'); return; }
     if (valid.length > MAX_RECIPIENTS) { toast.error(`You can share with up to ${MAX_RECIPIENTS} people at a time.`); return; }
     setBusy(true);
+    setNotSent(null);
     try {
-      await filesApi.share(userId, file.file_id, idToken, valid, { expiresIn: expiry, maxDownloads: limit });
-      toast.success(`Sent to ${valid.length} ${valid.length === 1 ? 'person' : 'people'}. ${expiryPhrase(expiry)}${limitPhrase(limit, valid.length > 1)}`);
-      onClose();
-    } catch (err) { toast.error(err); } finally { setBusy(false); }
+      const res = await filesApi.share(userId, file.file_id, idToken, valid, { expiresIn: expiry, maxDownloads: limit });
+      const sent = res?.sent?.length ?? valid.length;
+      toast.success(`Sent to ${sent} ${sent === 1 ? 'person' : 'people'}. ${expiryPhrase(expiry)}${limitPhrase(limit, sent > 1)}`);
+      if (res?.failed?.length) showNotSent(res.failed);
+      else onClose();
+    } catch (err) {
+      if (err.data?.failed?.length) showNotSent(err.data.failed);
+      else toast.error(err);
+    } finally { setBusy(false); }
   };
 
   return (
@@ -492,6 +506,8 @@ function ShareModal({ file, userId, idToken, onClose }) {
       </>}>
       <p className="truncate text-sm font-medium" title={file.file_name}>{file.file_name}</p>
       <p className="mt-1 text-sm text-muted">Each recipient gets an email with their own download link, so you can see who downloaded it.</p>
+
+      {notSent && <NotSentNotice failed={notSent} />}
 
       <label className="label mt-5" htmlFor="share-emails">Recipients</label>
       <div className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-md border border-line-strong bg-surface px-2 py-1.5 focus-within:border-accent focus-within:ring-3 focus-within:ring-ring">
@@ -519,6 +535,23 @@ function ShareModal({ file, userId, idToken, onClose }) {
       <ExpiryPicker id="share-expiry" value={expiry} onChange={setExpiry} />
       <LimitPicker id="share-limit" value={limit} onChange={setLimit} perPerson />
     </Modal>
+  );
+}
+
+// Which addresses the last send couldn't email, and why (one line per reason).
+function NotSentNotice({ failed }) {
+  const reasons = [...new Set(failed.map((f) => f.reason))];
+  return (
+    <div role="alert" className="mt-4 flex items-start gap-2.5 rounded-md border border-warning/30 bg-warning-soft px-3 py-2.5 text-sm">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+      <div className="min-w-0">
+        <p className="font-medium text-fg">
+          {failed.length === 1 ? 'Not sent to ' : `Not sent to ${failed.length} people: `}
+          <span className="break-all">{failed.map((f) => f.email).join(', ')}</span>
+        </p>
+        {reasons.map((r) => <p key={r} className="mt-1 text-muted">{r}</p>)}
+      </div>
+    </div>
   );
 }
 
