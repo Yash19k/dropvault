@@ -13,12 +13,19 @@ created at or before that moment stops working.
 import os
 import time
 import secrets
+import string
 import datetime
 
 # Seconds a link may live, as offered in the web app. NEVER = no expiry.
 NEVER = 'never'
+CODE_CHARS = frozenset(string.ascii_letters + string.digits + '-_')
 ALLOWED_TTLS = (900, 3600, 21600, 86400, 604800)   # 15m, 1h, 6h, 1d, 7d
 DEFAULT_TTL = 3600
+
+
+def valid_code(code):
+    '''Codes are what create() makes: short and URL-safe.'''
+    return bool(code) and len(code) <= 32 and all(c in CODE_CHARS for c in code)
 
 
 def parse_expires_in(value):
@@ -37,7 +44,12 @@ def public_base_url(event):
     if os.getenv('PUBLIC_API_URL'):
         return os.environ['PUBLIC_API_URL'].rstrip('/')
     ctx = event.get('requestContext') or {}
-    return 'https://{0}/{1}'.format(ctx.get('domainName'), ctx.get('stage')).rstrip('/')
+    domain = ctx.get('domainName') or ''
+    # The default execute-api host needs the stage in the path; a custom domain
+    # (domain.tf maps the stage at the root) must NOT have it, or links 403.
+    if domain.endswith('.amazonaws.com'):
+        return 'https://{0}/{1}'.format(domain, ctx.get('stage')).rstrip('/')
+    return 'https://{0}'.format(domain)
 
 
 def create(table, event, file_id, owner_id, ttl):

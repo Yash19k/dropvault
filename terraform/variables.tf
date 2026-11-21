@@ -122,3 +122,15 @@ variable "web_hosting" {
     error_message = "web_hosting must be 'amplify' or 'cloudfront'."
   }
 }
+
+variable "api_throttle_rate" {
+  description = "Steady-state requests per second allowed across the whole API stage"
+  type        = number
+  default     = 50
+}
+
+variable "api_throttle_burst" {
+  description = "Burst of requests allowed across the whole API stage"
+  type        = number
+  default     = 100
+}

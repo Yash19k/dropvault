@@ -72,13 +72,14 @@ font-family:'IBM Plex Sans',Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1b
 
 def owned_file(event):
     '''(user_id, file_item) for the caller's file, or (None, error response).'''
-    user_id, _name, _email = auth.resolve_user((event.get('headers') or {}).get('Authorization'))
+    user_id, _name, _email = auth.resolve_event_user(event)
     if not user_id:
         return None, json_response(401, {'message': 'Unauthorized'})
-    parts = event['path'].split('/')          # ['', 'v1', 'users', uid, 'files', fid, 'qr']
-    if parts[3] != user_id:
-        return None, json_response(401, {'message': 'User not authorized to perform this action'})
-    item = table().get_item(Key={'file_id': parts[5]}).get('Item')
+    # path: /v1/users/{user_id}/files/{file_id}/qr
+    if auth.path_param(event, 'user_id', 3) != user_id:
+        return None, json_response(403, {'message': 'User not authorized to perform this action'})
+    file_id = auth.path_param(event, 'file_id', 5)
+    item = table().get_item(Key={'file_id': file_id}).get('Item') if file_id else None
     if not item or item.get('user_id') != user_id:
         return None, json_response(404, {'error_message': 'File not found'})
     return user_id, item
@@ -89,12 +90,16 @@ def create_link(event):
         body = json.loads(event.get('body') or '{}') or {}
     except ValueError:
         return json_response(400, {'message': 'Body must be JSON'})
+    if not isinstance(body, dict):
+        return json_response(400, {'message': 'Body must be a JSON object'})
     ttl, error = links.parse_expires_in(body.get('expires_in'))
     if error:
         return json_response(400, {'message': error})
     user_id, item = owned_file(event)
     if not user_id:
         return item
+    if item.get('status', 'READY') != 'READY':
+        return json_response(409, {'message': 'File upload has not finished yet'})
     short_url, expires_at = links.create(table(), event, item['file_id'], user_id, ttl)
     return json_response(201, {'short_url': short_url, 'expires_at': expires_at})
 
@@ -111,9 +116,10 @@ def revoke_links(event):
 
 
 def follow_link(event):
-    code = event['path'].rstrip('/').split('/')[-1]
-    link = table().get_item(Key={'file_id': 'QR#' + code}).get('Item') if code else None
-    if not link:
+    code = ((event.get('pathParameters') or {}).get('code')
+            or (event.get('path') or '').rstrip('/').split('/')[-1])
+    link = table().get_item(Key={'file_id': 'QR#' + code}).get('Item') if links.valid_code(code) else None
+    if not link or link.get('kind') != 'qr_link':
         return html_page(404, 'Link not found',
                          'This download link is invalid or has expired. '
                          'Ask the person who shared it for a new one.')
@@ -135,7 +141,7 @@ def follow_link(event):
         Params={
             'Bucket': os.environ['USER_FILES_BUCKET'],
             'Key': key,
-            'ResponseContentDisposition': 'attachment; filename="{0}"'.format(item['file_name'])
+            'ResponseContentDisposition': auth.content_disposition(item['file_name'])
         },
         ExpiresIn=REDIRECT_TTL
     )
@@ -156,4 +162,4 @@ def lambda_handler(event, _):
         LOGGER.error({'error_message': '{}'.format(error)})
         if event.get('httpMethod') == 'GET':
             return html_page(500, 'Something went wrong', 'Please try again in a moment.')
-        return json_response(400, {'error_message': 'Internal server error'})
+        return json_response(500, {'error_message': 'Internal server error'})

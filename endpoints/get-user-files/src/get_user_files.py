@@ -26,9 +26,18 @@ def get_user_files(user_id):
     try:
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table(os.environ['FILE_SHARING_TABLE'])
-        response = table.scan(FilterExpression=Attr('user_id').eq(user_id))
+        # A Scan returns at most 1 MB per call: follow LastEvaluatedKey, or
+        # files beyond the first page silently disappear from the list.
+        items = []
+        kwargs = {'FilterExpression': Attr('user_id').eq(user_id)}
+        while True:
+            response = table.scan(**kwargs)
+            items.extend(response.get('Items', []))
+            if 'LastEvaluatedKey' not in response:
+                break
+            kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
         user_files = []
-        for item in response['Items']:
+        for item in items:
             user_files.append({
                 'file_id': item['file_id'],
                 'file_name': item['file_name'],
@@ -61,9 +70,13 @@ def init_env_vars():
 def lambda_handler(event, _):
     '''Lambda entrypoint.'''
     try:
-        user_id, _name, _email = auth.resolve_user(event['headers'].get('Authorization'))
+        user_id, _name, _email = auth.resolve_event_user(event)
         if not user_id:
             return {'statusCode': 401, 'body': json.dumps({'message': 'Unauthorized'}),
+                    'headers': CORS_HEADERS}
+        if auth.path_param(event, 'user_id', 3) != user_id:
+            return {'statusCode': 403,
+                    'body': json.dumps({'message': 'User not authorized to perform this action'}),
                     'headers': CORS_HEADERS}
         user_files = get_user_files(user_id)
         return {
@@ -74,5 +87,5 @@ def lambda_handler(event, _):
         }
     except Exception as error:
         LOGGER.error({'error_message': '{}'.format(error)})
-        return {'statusCode': 400, 'body': json.dumps({'error_message': 'Internal server error'}),
+        return {'statusCode': 500, 'body': json.dumps({'error_message': 'Internal server error'}),
                 'headers': CORS_HEADERS, 'isBase64Encoded': False}

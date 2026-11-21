@@ -155,7 +155,7 @@ resource "aws_api_gateway_deployment" "this" {
       [for r in module.route_auth : r.integration_id],
       [for c in module.cors_auth : c.integration_id],
       [module.route_qr_create.integration_id, module.route_qr_follow.integration_id,
-      module.route_qr_revoke.integration_id,
+        module.route_qr_revoke.integration_id,
       module.cors_qr.integration_id],
     )))
   }
@@ -168,3 +168,15 @@ resource "aws_api_gateway_stage" "this" {
   stage_name    = var.environment
 }
 
+
+# Stage-wide throttling: caps password guessing on /v1/login, share-email spam
+# and runaway Lambda/S3 costs. Excess requests get 429 Too Many Requests.
+resource "aws_api_gateway_method_settings" "throttle" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  stage_name  = aws_api_gateway_stage.this.stage_name
+  method_path = "*/*"
+  settings {
+    throttling_burst_limit = var.api_throttle_burst
+    throttling_rate_limit  = var.api_throttle_rate
+  }
+}

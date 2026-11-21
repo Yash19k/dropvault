@@ -43,3 +43,21 @@ resource "aws_s3_bucket_cors_configuration" "files" {
     max_age_seconds = 3000
   }
 }
+
+# Refuse any request to the files bucket that isn't over HTTPS. (A Deny-only
+# policy is not "public", so it works with the public access block above.)
+resource "aws_s3_bucket_policy" "files_tls_only" {
+  bucket = aws_s3_bucket.files.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [aws_s3_bucket.files.arn, "${aws_s3_bucket.files.arn}/*"]
+      Condition = { Bool = { "aws:SecureTransport" = "false" } }
+    }]
+  })
+  depends_on = [aws_s3_bucket_public_access_block.files]
+}

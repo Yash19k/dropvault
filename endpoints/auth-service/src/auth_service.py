@@ -5,7 +5,8 @@ Routes (API Gateway REST, Lambda proxy):
   POST /v1/users          {full_name, email, password} -> tokens + user_id (signed in)
   POST /v1/login          {email, password}            -> tokens
   POST /v1/refresh-token  {refresh_token}              -> new tokens
-  POST /v1/logout                                       -> 200 (tokens are stateless)
+  POST /v1/logout         Authorization: Bearer <access token> (or {access_token})
+                                                        -> 200, revokes every refresh token
   GET  /v1/userinfo       Authorization: Bearer <id or access token>
                                                         -> {user_id, name, email}
 
@@ -32,6 +33,10 @@ SECRET = os.environ['TOKEN_SECRET'].encode()
 ACCESS_TTL = 3600            # 1 hour
 REFRESH_TTL = 30 * 24 * 3600  # 30 days
 PBKDF2_ROUNDS = 200000
+MAX_EMAIL = 254
+MAX_NAME = 100
+MAX_PASSWORD = 256
+EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 CORS_HEADERS = {
     'Content-Type': 'application/json',
@@ -59,6 +64,17 @@ def check_password(password, stored):
     return hmac.compare_digest(hash_password(password, salt), stored)
 
 
+# Hashed when the email is unknown, so a failed login takes the same time
+# whether or not the account exists (no account enumeration by timing).
+DUMMY_HASH = hash_password(secrets.token_hex(16))
+
+
+def text(body, field):
+    '''A string field from the JSON body ('' if missing or not a string).'''
+    value = body.get(field)
+    return value if isinstance(value, str) else ''
+
+
 # --- tokens ------------------------------------------------------------------
 def _b64(data):
     return base64.urlsafe_b64encode(data).rstrip(b'=').decode()
@@ -83,7 +99,10 @@ def verify(token, allowed_types):
         claims = json.loads(_unb64(payload))
     except (ValueError, TypeError):
         return None
-    if claims.get('typ') not in allowed_types or claims.get('exp', 0) < time.time():
+    if not isinstance(claims, dict) or claims.get('typ') not in allowed_types:
+        return None
+    exp = claims.get('exp')
+    if not isinstance(exp, (int, float)) or exp < time.time():
         return None
     return claims
 
@@ -91,10 +110,13 @@ def verify(token, allowed_types):
 def issue_tokens(user):
     now = int(time.time())
     base = {'sub': user['user_id'], 'email': user['email'], 'name': user['name'], 'iat': now}
+    # Refresh tokens carry the user's token version; logout bumps it, which
+    # revokes every refresh token issued before (access tokens expire in 1h).
     return {
         'id_token': sign(dict(base, typ='id', exp=now + ACCESS_TTL)),
         'access_token': sign(dict(base, typ='access', exp=now + ACCESS_TTL)),
-        'refresh_token': sign(dict(base, typ='refresh', exp=now + REFRESH_TTL)),
+        'refresh_token': sign(dict(base, typ='refresh', exp=now + REFRESH_TTL,
+                                   ver=int(user.get('token_version', 0)))),
         'token_type': 'Bearer',
         'expires_in': ACCESS_TTL,
     }
@@ -102,13 +124,15 @@ def issue_tokens(user):
 
 # --- routes ------------------------------------------------------------------
 def sign_up(body):
-    email = (body.get('email') or '').strip().lower()
-    name = (body.get('full_name') or '').strip()
-    password = body.get('password') or ''
-    if not name or not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+    email = text(body, 'email').strip().lower()
+    name = ' '.join(text(body, 'full_name').split())   # collapse whitespace / newlines
+    password = text(body, 'password')
+    if not name or len(email) > MAX_EMAIL or not EMAIL_RE.match(email):
         return respond(400, {'message': 'Full name and a valid email are required'})
-    if len(password) < 8:
-        return respond(400, {'message': 'Password must be at least 8 characters'})
+    if len(name) > MAX_NAME:
+        return respond(400, {'message': 'Full name must be at most {0} characters'.format(MAX_NAME)})
+    if len(password) < 8 or len(password) > MAX_PASSWORD:
+        return respond(400, {'message': 'Password must be 8 to {0} characters'.format(MAX_PASSWORD)})
     user = {'email': email, 'user_id': str(uuid.uuid4()), 'name': name,
             'password': hash_password(password), 'created_at': int(time.time())}
     try:
@@ -119,27 +143,54 @@ def sign_up(body):
 
 
 def login(body):
-    email = (body.get('email') or '').strip().lower()
-    user = TABLE.get_item(Key={'email': email}).get('Item') if email else None
-    if not user or not check_password(body.get('password') or '', user['password']):
+    email = text(body, 'email').strip().lower()
+    password = text(body, 'password')[:MAX_PASSWORD]
+    user = None
+    if email and len(email) <= MAX_EMAIL:
+        user = TABLE.get_item(Key={'email': email}).get('Item')
+    if not user:
+        check_password(password, DUMMY_HASH)
+        return respond(401, {'message': 'Incorrect email or password'})
+    if not check_password(password, user['password']):
         return respond(401, {'message': 'Incorrect email or password'})
     return respond(200, issue_tokens(user))
 
 
 def refresh(body):
-    claims = verify(body.get('refresh_token') or '', ('refresh',))
+    claims = verify(text(body, 'refresh_token'), ('refresh',))
     if not claims:
         return respond(401, {'message': 'Invalid refresh token'})
     user = TABLE.get_item(Key={'email': claims['email']}).get('Item')
-    if not user:
+    if (not user or user.get('user_id') != claims.get('sub')
+            or int(claims.get('ver', 0)) != int(user.get('token_version', 0))):
         return respond(401, {'message': 'Invalid refresh token'})
     return respond(200, issue_tokens(user))
 
 
-def userinfo(headers):
+def bearer(headers):
     auth = next((v for k, v in headers.items() if k.lower() == 'authorization'), '') or ''
-    token = auth[7:].strip() if auth.lower().startswith('bearer ') else auth.strip()
-    claims = verify(token, ('id', 'access'))
+    return auth[7:].strip() if auth.lower().startswith('bearer ') else auth.strip()
+
+
+def logout(headers, body):
+    '''Revoke all of the caller's refresh tokens (signs out every device once
+       their current 1-hour access token runs out).'''
+    claims = verify(bearer(headers) or text(body, 'access_token'), ('id', 'access'))
+    if claims:
+        try:
+            TABLE.update_item(
+                Key={'email': claims['email']},
+                UpdateExpression='ADD token_version :one',
+                ConditionExpression='attribute_exists(email) AND user_id = :uid',
+                ExpressionAttributeValues={':one': 1, ':uid': claims['sub']},
+            )
+        except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
+            pass  # account no longer exists: nothing to revoke
+    return respond(200, {'message': 'Logged out'})
+
+
+def userinfo(headers):
+    claims = verify(bearer(headers), ('id', 'access'))
     if not claims:
         return respond(401, {'message': 'Unauthorized'})
     return respond(200, {'user_id': claims['sub'], 'name': claims['name'],
@@ -154,6 +205,8 @@ def lambda_handler(event, _context):
         body = json.loads(event.get('body') or '{}') if method == 'POST' else {}
     except ValueError:
         return respond(400, {'message': 'Invalid JSON body'})
+    if not isinstance(body, dict):
+        return respond(400, {'message': 'Body must be a JSON object'})
 
     try:
         if method == 'POST' and path.endswith('/v1/users'):
@@ -163,7 +216,7 @@ def lambda_handler(event, _context):
         if method == 'POST' and path.endswith('/v1/refresh-token'):
             return refresh(body)
         if method == 'POST' and path.endswith('/v1/logout'):
-            return respond(200, {'message': 'Logged out'})
+            return logout(headers, body)
         if method == 'GET' and path.endswith('/v1/userinfo'):
             return userinfo(headers)
         return respond(404, {'message': 'Not found'})

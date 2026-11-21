@@ -41,7 +41,7 @@ resource "aws_iam_role_policy" "auth_users" {
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
-      Action   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+      Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"] # UpdateItem: logout revokes refresh tokens
       Resource = aws_dynamodb_table.users.arn
     }]
   })

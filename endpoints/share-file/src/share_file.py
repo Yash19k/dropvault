@@ -8,6 +8,7 @@ Lambda's temporary credentials and can be revoked.
 
 import os
 import json
+import html
 import collections
 from os.path import join, dirname
 from jsonschema import validate
@@ -67,12 +68,21 @@ def get_file(user_id, file_id):
 
 def is_user_authorized(user_id, event):
     '''The {user_id} in the path must match the token's user.'''
-    return event['path'].split('/')[3] == user_id
+    return auth.path_param(event, 'user_id', 3) == user_id
+
+
+def plain(text, limit=100):
+    '''One line of user-supplied text, safe for an email subject.'''
+    cleaned = ''.join(' ' if ord(c) < 32 or ord(c) == 127 else c for c in (text or ''))
+    return ' '.join(cleaned.split())[:limit]
 
 
 def build_email_html(sender, file_name, download_url, app_name, ttl):
     '''A clean, generic, branded HTML email.'''
-    sender_label = sender or 'A {0} user'.format(app_name)
+    # Everything user-controlled (the sender's display name and the file name)
+    # is HTML-escaped: otherwise any user could inject markup / phishing links
+    # into mail sent from this app's verified SES identity.
+    sender_label = html.escape(plain(sender) or 'A {0} user'.format(app_name))
     return '''\
 <!doctype html><html><body style="margin:0;background:#f7f7f5;font-family:'IBM Plex Sans',Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
   <div style="max-width:520px;margin:0 auto;padding:40px 24px;">
@@ -90,7 +100,8 @@ def build_email_html(sender, file_name, download_url, app_name, ttl):
     </div>
     <p style="margin:20px 0 0;color:#8b8b83;font-size:12px;">Sent with {app_name}.</p>
   </div>
-</body></html>'''.format(app_name=app_name, sender=sender_label, file_name=file_name, url=download_url,
+</body></html>'''.format(app_name=html.escape(app_name), sender=sender_label, file_name=html.escape(file_name),
+                         url=html.escape(download_url, quote=True),
                          lifetime=lifetime_sentence(ttl))
 
 
@@ -104,7 +115,7 @@ def lifetime_sentence(ttl):
 def send_file_link(sender, email, file_name, download_url, app_name, ttl):
     '''Send the download link by email through SES.'''
     message = {
-        'Subject': {'Data': '{0} shared a file with you'.format(sender or app_name)},
+        'Subject': {'Data': '{0} shared a file with you'.format(plain(sender) or app_name)},
         'Body': {'Html': {'Data': build_email_html(sender, file_name, download_url, app_name, ttl)}}
     }
     ses_client = boto3.client('ses')
@@ -143,7 +154,11 @@ def build_api_response(file_item, expires_at):
 def lambda_handler(event, _):
     '''Lambda entrypoint.'''
     try:
-        req_body = json.loads(event['body'])
+        try:
+            req_body = json.loads(event.get('body') or '{}')
+        except ValueError:
+            return {'statusCode': 400, 'body': json.dumps({'message': 'Body must be JSON'}),
+                    'headers': CORS_HEADERS}
         is_valid, error_msg = check_inputs(req_body)
         if not is_valid:
             return {'statusCode': 400, 'body': json.dumps({'message': error_msg}),
@@ -152,18 +167,22 @@ def lambda_handler(event, _):
         if ttl_error:
             return {'statusCode': 400, 'body': json.dumps({'message': ttl_error}),
                     'headers': CORS_HEADERS}
-        user_id, name, _email = auth.resolve_user(event['headers'].get('Authorization'))
+        user_id, name, _email = auth.resolve_event_user(event)
         if not user_id:
             return {'statusCode': 401, 'body': json.dumps({'message': 'Unauthorized'}),
                     'headers': CORS_HEADERS}
-        file_id = event['path'].split('/')[5]
+        file_id = auth.path_param(event, 'file_id', 5)
         if not is_user_authorized(user_id, event):
-            return {'statusCode': 401,
+            return {'statusCode': 403,
                     'body': json.dumps({'message': 'User not authorized to perform this action'}),
                     'headers': CORS_HEADERS}
         file_item = get_file(user_id, file_id)
         if not file_item:
             return {'statusCode': 404, 'body': json.dumps({'error_message': 'File not found'}),
+                    'headers': CORS_HEADERS}
+        if file_item.get('status', 'READY') != 'READY':
+            return {'statusCode': 409,
+                    'body': json.dumps({'message': 'File upload has not finished yet'}),
                     'headers': CORS_HEADERS}
         expires_at = share_file(event, file_item, name, req_body, ttl)
         return {
@@ -174,5 +193,5 @@ def lambda_handler(event, _):
         }
     except Exception as error:
         LOGGER.error({'error_message': '{}'.format(error)})
-        return {'statusCode': 400, 'body': json.dumps({'error_message': 'Internal server error'}),
+        return {'statusCode': 500, 'body': json.dumps({'error_message': 'Internal server error'}),
                 'headers': CORS_HEADERS, 'isBase64Encoded': False}

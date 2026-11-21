@@ -26,6 +26,17 @@ async function request(method, path, { body, token } = {}) {
   return data;
 }
 
+// The API accepts 1-255 chars with no slashes or control characters.
+function safeFileName(name) {
+  // eslint-disable-next-line no-control-regex
+  const cleaned = (name || '').replace(/[/\\\u0000-\u001f\u007f]/g, '_').trim();
+  const safe = !cleaned || cleaned === '.' || cleaned === '..' ? 'file' : cleaned;
+  if (safe.length <= 255) return safe;
+  const dot = safe.lastIndexOf('.');
+  const ext = dot > 0 && safe.length - dot <= 16 ? safe.slice(dot) : '';
+  return safe.slice(0, 255 - ext.length) + ext;
+}
+
 // Direct browser -> S3 PUT against a presigned URL, with progress.
 // extraHeaders carries the SSE-KMS headers when per-user encryption is on.
 function putToS3(uploadUrl, file, contentType, onProgress, extraHeaders = {}) {
@@ -51,10 +62,16 @@ export const filesApi = {
     const contentType = file.type || 'application/octet-stream';
     const start = await request('POST', `/users/${userId}/files`, {
       token: idToken,
-      body: { file_name: file.name, content_type: contentType, size: file.size },
+      body: { file_name: safeFileName(file.name), content_type: contentType, size: file.size },
     });
-    await putToS3(start.upload_url, file, contentType, onProgress, start.upload_headers);
-    await request('POST', `/users/${userId}/files/${start.file_id}/complete`, { token: idToken });
+    try {
+      await putToS3(start.upload_url, file, contentType, onProgress, start.upload_headers);
+      await request('POST', `/users/${userId}/files/${start.file_id}/complete`, { token: idToken });
+    } catch (err) {
+      // Don't leave a record stuck on "Uploading…" forever: remove it (best effort).
+      request('DELETE', `/users/${userId}/files/${start.file_id}`, { token: idToken, body: {} }).catch(() => {});
+      throw err;
+    }
     return start.file_id;
   },
 

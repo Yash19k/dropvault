@@ -377,7 +377,8 @@ function UploadTray({ uploads, onClear }) {
   );
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_RE = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
+const MAX_RECIPIENTS = 10; // the share API accepts at most 10 per request
 
 function ShareModal({ file, userId, idToken, onClose }) {
   const toast = useToast();
@@ -395,9 +396,11 @@ function ShareModal({ file, userId, idToken, onClose }) {
   };
 
   const submit = async () => {
-    const all = draft.trim() ? [...emails, draft.trim()] : emails;
-    const valid = all.filter((e) => EMAIL_RE.test(e));
+    const pending = draft.trim().replace(/,$/, '');
+    if (pending && !EMAIL_RE.test(pending)) { toast.error(`"${pending}" is not a valid email address.`); return; }
+    const valid = [...new Set(pending ? [...emails, pending] : emails)];
     if (valid.length === 0) { toast.error('Add at least one recipient.'); return; }
+    if (valid.length > MAX_RECIPIENTS) { toast.error(`You can share with up to ${MAX_RECIPIENTS} people at a time.`); return; }
     setBusy(true);
     try {
       await filesApi.share(userId, file.file_id, idToken, valid, expiry);

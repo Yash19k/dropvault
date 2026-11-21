@@ -10,20 +10,26 @@
     "file_name": {
       "$id": "#/properties/file_name",
       "type": "string",
-      "title": "The name under which you want to store your file",
+      "title": "The name under which you want to store your file (no slashes or control characters)",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^(?!\\.{1,2}$)[^/\\\\\\u0000-\\u001f\\u007f]+$",
       "examples": ["report.pdf"]
     },
     "content_type": {
       "$id": "#/properties/content_type",
       "type": "string",
       "title": "The MIME type of the file (used for the presigned upload and downloads)",
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*(\\s*;[ -~]*)?$",
       "examples": ["application/pdf"]
     },
     "size": {
       "$id": "#/properties/size",
       "type": "integer",
-      "title": "The size of the file in bytes",
+      "title": "The size of the file in bytes (S3 single-PUT limit is 5 GiB)",
       "minimum": 0,
+      "maximum": 5368709120,
       "examples": [1048576]
     }
   },

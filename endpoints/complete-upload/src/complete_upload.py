@@ -33,8 +33,7 @@ def get_file(user_id, file_id):
 
 def is_user_authorized(user_id, event):
     '''The {user_id} in the path must match the token's user.'''
-    url_user_id = event['path'].split('/')[3]
-    return url_user_id == user_id
+    return auth.path_param(event, 'user_id', 3) == user_id
 
 
 def mark_ready(file_item, conf_values):
@@ -64,13 +63,13 @@ def lambda_handler(event, _):
     '''Lambda entrypoint.'''
     try:
         conf_values = init_env_vars()
-        user_id, _name, _email = auth.resolve_user(event['headers'].get('Authorization'))
+        user_id, _name, _email = auth.resolve_event_user(event)
         if not user_id:
             return {'statusCode': 401, 'body': json.dumps({'message': 'Unauthorized'}),
                     'headers': CORS_HEADERS}
-        file_id = event['path'].split('/')[5]
+        file_id = auth.path_param(event, 'file_id', 5)
         if not is_user_authorized(user_id, event):
-            return {'statusCode': 401,
+            return {'statusCode': 403,
                     'body': json.dumps({'message': 'User not authorized to perform this action'}),
                     'headers': CORS_HEADERS}
         file_item = get_file(user_id, file_id)
@@ -86,5 +85,5 @@ def lambda_handler(event, _):
                 'headers': CORS_HEADERS, 'isBase64Encoded': False}
     except Exception as error:
         LOGGER.error({'error_message': '{}'.format(error)})
-        return {'statusCode': 400, 'body': json.dumps({'error_message': 'Internal server error'}),
+        return {'statusCode': 500, 'body': json.dumps({'error_message': 'Internal server error'}),
                 'headers': CORS_HEADERS, 'isBase64Encoded': False}

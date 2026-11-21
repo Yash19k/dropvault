@@ -31,6 +31,7 @@ def s3_client(region):
 
 
 LOGGER = log.setup_logging()
+KMS_LOCK_STALE_SECONDS = 60
 
 CORS_HEADERS = {
     'Content-Type': 'application/json',
@@ -102,19 +103,38 @@ def ensure_user_kms_key(user_id, conf_values):
         pass
 
     # Claim the right to create the key (atomic; only one invocation wins).
+    conditional_failed = table.meta.client.exceptions.ConditionalCheckFailedException
     try:
         table.put_item(
-            Item={'file_id': lock_id, 'kind': 'user_key', 'status': 'CREATING'},
+            Item={'file_id': lock_id, 'kind': 'user_key', 'status': 'CREATING',
+                  'claimed_at': int(time.time())},
             ConditionExpression='attribute_not_exists(file_id)'
         )
-    except table.meta.client.exceptions.ConditionalCheckFailedException:
+    except conditional_failed:
         # Another upload is creating it - wait for the ARN to be published.
         for _ in range(40):
             record = table.get_item(Key={'file_id': lock_id}).get('Item')
             if record and record.get('kms_key_arn'):
                 return record['kms_key_arn']
             time.sleep(0.25)
-        return kms.describe_key(KeyId=alias)['KeyMetadata']['Arn']
+        try:
+            return kms.describe_key(KeyId=alias)['KeyMetadata']['Arn']
+        except kms.exceptions.NotFoundException:
+            pass
+        # The winner died before creating the key: take over a claim that is
+        # older than KMS_LOCK_STALE_SECONDS, otherwise this user could never
+        # upload again. Still atomic - only one invocation can take it over.
+        try:
+            table.update_item(
+                Key={'file_id': lock_id},
+                UpdateExpression='SET claimed_at = :now',
+                ConditionExpression='attribute_not_exists(kms_key_arn) AND '
+                                    '(attribute_not_exists(claimed_at) OR claimed_at < :stale)',
+                ExpressionAttributeValues={':now': int(time.time()),
+                                           ':stale': int(time.time()) - KMS_LOCK_STALE_SECONDS}
+            )
+        except conditional_failed:
+            raise Exception('Encryption key is still being created, try again shortly')
 
     # We won the claim: create the single key + alias and publish the ARN.
     key_arn = kms.create_key(
@@ -201,15 +221,23 @@ def init_env_vars():
 def lambda_handler(event, _):
     '''Lambda entrypoint.'''
     try:
-        req_body = json.loads(event['body'])
+        try:
+            req_body = json.loads(event.get('body') or '{}')
+        except ValueError:
+            return {'statusCode': 400, 'body': json.dumps({'message': 'Body must be JSON'}),
+                    'headers': CORS_HEADERS}
         is_valid, error_msg = check_inputs(req_body)
         if not is_valid:
             return {'statusCode': 400, 'body': json.dumps({'message': error_msg}),
                     'headers': CORS_HEADERS}
         conf_values = init_env_vars()
-        user_id, _name, _email = auth.resolve_user(event['headers'].get('Authorization'))
+        user_id, _name, _email = auth.resolve_event_user(event)
         if not user_id:
             return {'statusCode': 401, 'body': json.dumps({'message': 'Unauthorized'}),
+                    'headers': CORS_HEADERS}
+        if auth.path_param(event, 'user_id', 3) != user_id:
+            return {'statusCode': 403,
+                    'body': json.dumps({'message': 'User not authorized to perform this action'}),
                     'headers': CORS_HEADERS}
         file_id, upload_url, upload_headers = create_upload(user_id, req_body, conf_values)
         return {
@@ -220,5 +248,5 @@ def lambda_handler(event, _):
         }
     except Exception as error:
         LOGGER.error({'error_message': '{}'.format(error)})
-        return {'statusCode': 400, 'body': json.dumps({'error_message': 'Internal server error'}),
+        return {'statusCode': 500, 'body': json.dumps({'error_message': 'Internal server error'}),
                 'headers': CORS_HEADERS, 'isBase64Encoded': False}
