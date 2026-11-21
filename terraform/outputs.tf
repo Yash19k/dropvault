@@ -51,3 +51,8 @@ output "alerts_topic_arn" {
   description = "SNS topic the CloudWatch alarms publish to (subscribe more endpoints if you like)"
   value       = aws_sns_topic.alerts.arn
 }
+
+output "monitor_function" {
+  description = "The monitor Lambda (log-error emails + scheduled health check). deploy.sh runs it after a deploy."
+  value       = aws_lambda_function.monitor.function_name
+}

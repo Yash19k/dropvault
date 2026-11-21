@@ -45,8 +45,9 @@
 - **Light and dark mode**, following your system setting or chosen manually.
 - **Encryption at rest:** SSE-S3 by default, or one KMS key for the app, or one KMS key **per user**.
 - **One-command deploy** with Terraform, and a **fully offline mode** using LocalStack.
-- **Tested and monitored:** pytest suite against a mocked AWS, GitHub Actions CI, and CloudWatch alarms
-  that can email you when something breaks.
+- **Tested and monitored:** pytest suite against a mocked AWS, GitHub Actions CI, and email alerts: any
+  error in the logs, a health check every 5 minutes (it emails when something breaks and when it's fixed),
+  CloudWatch alarms and failed deploys.
 
 | Light | Dark |
 | --- | --- |
@@ -81,6 +82,7 @@
 
   DynamoDB TTL removes an unfinished upload ──stream──► Lambda: cleanup ──► S3 (abort / delete)
   CloudWatch alarms (Lambda errors, API 5xx) ──► SNS ──► your email
+  ERROR lines in the logs, health check every 5 min ──► Lambda: monitor ──► SNS
 ```
 
 Protected routes run a **Lambda authorizer** before the file Lambdas. With the built-in auth service it
@@ -117,7 +119,7 @@ Gateway caches the answer per token, so most requests skip it entirely.
 │   ├── lambda.tf  layers.tf   file Lambdas + the shared code and jsonschema layers
 │   ├── s3.tf  dynamodb.tf     storage, CORS, lifecycle; table, indexes, TTL, stream
 │   ├── cleanup.tf             stream → cleanup Lambda for abandoned uploads
-│   ├── monitoring.tf          CloudWatch alarms → SNS topic (→ alert_email)
+│   ├── monitoring.tf          alerts: monitor Lambda, log subscriptions, schedule, alarms → SNS (→ alert_email)
 │   ├── kms.tf  ses.tf         encryption modes, sender email identity
 │   ├── web.tf                 Amplify Hosting or S3 + CloudFront
 │   └── terraform.tfvars.example
@@ -207,7 +209,10 @@ The main `terraform.tfvars` settings (see [the example](./terraform/terraform.tf
 | `allowed_origins` | `["http://localhost:3001"]` | Extra origins allowed to upload to S3 (the hosted app is always allowed) |
 | `user_quota_bytes` | `10737418240` (10 GiB) | Storage each user may use. `0` = unlimited |
 | `admin_emails` | `[]` | Owner admins: they get the admin panel and can't be demoted, suspended or deleted from it. They can make other users admins there |
-| `alert_email` | `""` | Email for CloudWatch alarms (AWS sends a confirmation link first) |
+| `alert_email` | `""` | Email for alerts: log errors, health check problems, alarms, failed deploys (AWS sends a confirmation link first) |
+| `health_check_minutes` | `5` | How often the monitor runs the health check. `0` = off |
+| `alert_cooldown_minutes` | `15` | At most one error email per function in this time (the next one says how many were held back) |
+| `alert_utc_offset` | `+00:00` | Time zone of the times in alert emails, e.g. `+05:30` |
 | `authorizer_cache_seconds` | `300` | How long API Gateway remembers a valid token |
 | `bash_bin`, `python_bin` | `/bin/bash`, `python3` | On Windows: `C:/Program Files/Git/bin/bash.exe` and `python` |
 
@@ -301,6 +306,25 @@ also reads CloudWatch for the chosen range (requests, 4xx/5xx, p90/p99 latency, 
 throttles and timings) and the most recent errors in the functions' logs. Its IAM permissions are
 read-only and limited to this app's resources wherever AWS allows.
 
+**Alerts.** Set `alert_email` and confirm the link AWS sends; everything below then reaches your inbox
+through one SNS topic (`monitoring.tf`, code in `endpoints/admin/src/monitor.py`):
+
+- **Errors in the logs.** Each function's log group passes its `ERROR` lines, timeouts and runtime crashes
+  to the monitor Lambda within seconds, which emails the error with its cause (`MessageRejected: Email
+  address is not verified.`) and a link to the log stream. This catches errors the code turned into a 500,
+  which Lambda's own `Errors` metric never counts. At most one email per function per
+  `alert_cooldown_minutes`; the next one says how many errors were held back. Turned-away sign-ins
+  (the authorizer's `Unauthorized`) are skipped.
+- **Health check every `health_check_minutes`.** The Health page's checks, plus three requests from
+  outside: the website must answer, a signed-in API route must say 401 without a token, and an unknown
+  download link must say 404 (the links Lambda and DynamoDB). A failure is emailed at once, a warning
+  once it shows up twice in a row, and you get another email when it's fixed.
+- **CloudWatch alarms:** Lambda errors, API 5xx, a 4xx spike (alarm and OK emails).
+- **Deploys.** `deploy.sh` emails the topic if it stops with an error, and runs the health check at the end.
+
+Send yourself a test: `aws lambda invoke --function-name enclave-dev-monitor --cli-binary-format
+raw-in-base64-out --payload '{"action": "test"}' out.json`.
+
 **Uploads.** Files up to 100 MB go up in one presigned PUT. Bigger files use an S3 multipart upload: the
 API picks a part size (at least 16 MB, and big enough to stay within S3's 10,000 parts), the browser
 fetches presigned URLs for the parts in batches and sends four parts at a time, retrying each one up to
@@ -348,7 +372,8 @@ creation uses a DynamoDB conditional write as a lock, so each user gets exactly 
 At personal or demo scale this runs for about **$0 to $1 a month**. Lambda, API Gateway and DynamoDB
 on-demand are pay-per-request with free tiers, and S3 costs about $0.025 per GB-month. `per_user` KMS adds
 about $1 per user per month. The CloudWatch alarms (one per Lambda plus two for the API) cost about
-$0.10 each per month after the free 10.
+$0.10 each per month after the free 10. The monitor (a Lambda run every 5 minutes, a tiny on-demand
+table, SNS emails) stays inside the free tiers.
 
 ## Security notes
 

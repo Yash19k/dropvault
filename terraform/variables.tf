@@ -166,7 +166,37 @@ variable "admin_emails" {
 
 # --- Alerts ---
 variable "alert_email" {
-  description = "Email address for CloudWatch alarm notifications (Lambda errors, API 5xx). Empty = alarms only go to the SNS topic."
+  description = "Email address for alerts: errors in the logs, health check problems, CloudWatch alarms and failed deploys. AWS emails it a confirmation link first. Empty = alerts only go to the SNS topic."
   type        = string
   default     = ""
+}
+
+variable "health_check_minutes" {
+  description = "How often the monitor runs the health check (the Health page's checks plus requests to the website and API) and emails problems. 0 = off."
+  type        = number
+  default     = 5
+  validation {
+    condition     = var.health_check_minutes >= 0 && var.health_check_minutes <= 1440 && floor(var.health_check_minutes) == var.health_check_minutes
+    error_message = "health_check_minutes must be a whole number from 0 to 1440."
+  }
+}
+
+variable "alert_cooldown_minutes" {
+  description = "At most one error email per function in this many minutes; the next email says how many errors were held back."
+  type        = number
+  default     = 15
+  validation {
+    condition     = var.alert_cooldown_minutes >= 0 && floor(var.alert_cooldown_minutes) == var.alert_cooldown_minutes
+    error_message = "alert_cooldown_minutes must be a whole number, 0 or more."
+  }
+}
+
+variable "alert_utc_offset" {
+  description = "Time zone for the times in alert emails, as an offset from UTC (e.g. \"+05:30\")."
+  type        = string
+  default     = "+00:00"
+  validation {
+    condition     = can(regex("^[+-]\\d\\d:\\d\\d$", var.alert_utc_offset))
+    error_message = "alert_utc_offset must look like +05:30 or -04:00."
+  }
 }

@@ -13,8 +13,69 @@ locals {
   # names, not resources, so the admin Lambda doesn't depend on itself.
   admin_lambda_names = concat(
     [for k, _ in local.functions : "${local.prefix}-${k}"],
-    ["${local.prefix}-auth", "${local.prefix}-qr", "${local.prefix}-authorizer", "${local.prefix}-admin"],
+    ["${local.prefix}-auth", "${local.prefix}-qr", "${local.prefix}-authorizer", "${local.prefix}-admin",
+    "${local.prefix}-monitor"],
   )
+
+  # What the health checks read (describe / get / list only). Shared with the
+  # monitor Lambda (monitoring.tf), which runs the same checks on a schedule.
+  health_read_statements = [
+    {
+      # table status, TTL and stream
+      Effect   = "Allow"
+      Action   = ["dynamodb:DescribeTable", "dynamodb:DescribeTimeToLive"]
+      Resource = [aws_dynamodb_table.files.arn, aws_dynamodb_table.users.arn]
+    },
+    {
+      # the bucket answers, is encrypted and blocks public access
+      Effect   = "Allow"
+      Action   = ["s3:ListBucket", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"]
+      Resource = aws_s3_bucket.files.arn
+    },
+    {
+      # the API stage
+      Effect   = "Allow"
+      Action   = ["apigateway:GET"]
+      Resource = "arn:aws:apigateway:${var.aws_region}::/restapis/${aws_api_gateway_rest_api.api.id}/stages/${var.environment}"
+    },
+    {
+      # this app's functions
+      Effect   = "Allow"
+      Action   = ["lambda:GetFunctionConfiguration"]
+      Resource = "arn:aws:lambda:${var.aws_region}:${local.account_id}:function:${local.prefix}-*"
+    },
+    {
+      # the cleanup trigger (this call can't be limited to resources)
+      Effect   = "Allow"
+      Action   = ["lambda:ListEventSourceMappings"]
+      Resource = "*"
+    },
+    {
+      # recent errors from this app's function logs
+      Effect   = "Allow"
+      Action   = ["logs:FilterLogEvents", "logs:GetLogEvents"]
+      Resource = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/aws/lambda/${local.prefix}-*"
+    },
+    {
+      # sender verification, sandbox status and quota (account-level reads)
+      Effect   = "Allow"
+      Action   = ["ses:GetAccount", "ses:GetEmailIdentity", "ses:GetIdentityVerificationAttributes", "ses:GetSendQuota"]
+      Resource = "*"
+    },
+    {
+      # alarm states (read-only). Listing alarms by name prefix can't be
+      # limited to resources: IAM checks it against "*" and denies otherwise.
+      Effect   = "Allow"
+      Action   = ["cloudwatch:DescribeAlarms"]
+      Resource = "*"
+    },
+    {
+      # GetMetricData can't be limited to resources
+      Effect   = "Allow"
+      Action   = ["cloudwatch:GetMetricData"]
+      Resource = "*"
+    },
+  ]
 }
 
 data "archive_file" "admin" {
@@ -71,62 +132,8 @@ resource "aws_iam_role_policy" "admin" {
         Action   = ["dynamodb:Scan", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"]
         Resource = aws_dynamodb_table.users.arn
       },
-      {
-        # health: table status, TTL and stream
-        Effect   = "Allow"
-        Action   = ["dynamodb:DescribeTable", "dynamodb:DescribeTimeToLive"]
-        Resource = [aws_dynamodb_table.files.arn, aws_dynamodb_table.users.arn]
-      },
-      {
-        # health: the bucket answers, is encrypted and blocks public access
-        Effect   = "Allow"
-        Action   = ["s3:ListBucket", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"]
-        Resource = aws_s3_bucket.files.arn
-      },
-      {
-        # health: the API stage
-        Effect   = "Allow"
-        Action   = ["apigateway:GET"]
-        Resource = "arn:aws:apigateway:${var.aws_region}::/restapis/${aws_api_gateway_rest_api.api.id}/stages/${var.environment}"
-      },
-      {
-        # health: this app's functions
-        Effect   = "Allow"
-        Action   = ["lambda:GetFunctionConfiguration"]
-        Resource = "arn:aws:lambda:${var.aws_region}:${local.account_id}:function:${local.prefix}-*"
-      },
-      {
-        # health: the cleanup trigger (this call can't be limited to resources)
-        Effect   = "Allow"
-        Action   = ["lambda:ListEventSourceMappings"]
-        Resource = "*"
-      },
-      {
-        # health: recent errors from this app's function logs
-        Effect   = "Allow"
-        Action   = ["logs:FilterLogEvents", "logs:GetLogEvents"]
-        Resource = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/aws/lambda/${local.prefix}-*"
-      },
-      {
-        # health: sender verification, sandbox status and quota (account-level reads)
-        Effect   = "Allow"
-        Action   = ["ses:GetAccount", "ses:GetEmailIdentity", "ses:GetIdentityVerificationAttributes", "ses:GetSendQuota"]
-        Resource = "*"
-      },
-      {
-        # alarm states (read-only). Listing alarms by name prefix can't be
-        # limited to resources: IAM checks it against "*" and denies otherwise.
-        Effect   = "Allow"
-        Action   = ["cloudwatch:DescribeAlarms"]
-        Resource = "*"
-      },
-      {
-        # GetMetricData can't be limited to resources
-        Effect   = "Allow"
-        Action   = ["cloudwatch:GetMetricData"]
-        Resource = "*"
-      },
       ],
+      local.health_read_statements,
       # Encrypted files: decrypt to download them; per_user also schedules a
       # deleted account's key for deletion. The health page reads the key's
       # state and rotation (shared) or counts the user keys (per_user).

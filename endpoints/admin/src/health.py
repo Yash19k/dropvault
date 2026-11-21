@@ -360,23 +360,28 @@ def fetch_errors(start):
     newest = merged[:ERRORS_SHOWN]
 
     def add_cause(entry):
-        """The filter only finds the "ERROR" line; the exception that caused
-           it ("KeyError: 'x'") is a line or two later in the same stream."""
-        if HAS_CAUSE.search(entry['message']) or not entry['stream']:
-            return
-        try:
-            page = logs.get_log_events(logGroupName=entry['group'], logStreamName=entry['stream'],
-                                       startTime=entry['at'], endTime=entry['at'] + 3000, startFromHead=True, limit=60)
-        except ClientError:
-            return
-        lines = [e.get('message', '').strip() for e in page.get('events', [])]
-        cause = next((line for line in reversed(lines) if CAUSE_LINE.match(line)), None)
+        cause = find_cause(logs, entry['group'], entry['stream'], entry['at'], entry['message'])
         if cause:
             entry['message'] = (entry['message'] + ' · ' + cause)[:600]
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(add_cause, newest[:CAUSES_LOOKED_UP]))
     return [{'function': e['function'], 'at': e['at'], 'message': e['message']} for e in newest]
+
+
+def find_cause(logs, group, stream, at, message):
+    """A filter only finds the "ERROR" line; the exception that caused it
+       ("KeyError: 'x'") is a line or two later in the same stream. None when
+       the message already names it or it can't be found."""
+    if HAS_CAUSE.search(message) or not stream:
+        return None
+    try:
+        page = logs.get_log_events(logGroupName=group, logStreamName=stream,
+                                   startTime=at, endTime=at + 3000, startFromHead=True, limit=60)
+    except ClientError:
+        return None
+    lines = [e.get('message', '').strip() for e in page.get('events', [])]
+    return next((line for line in reversed(lines) if CAUSE_LINE.match(line)), None)
 
 
 # --- turning fetched data into checks ------------------------------------------
@@ -516,15 +521,9 @@ def latest(series, qid):
     return (max(points), points[max(points)]) if points else None
 
 
-def health(range_key):
-    if range_key not in RANGES:
-        raise ValueError('range must be one of ' + ', '.join(RANGES))
-    seconds, period = RANGES[range_key]
-    now = datetime.datetime.now(datetime.timezone.utc)
-    end = now.replace(second=0, microsecond=0) + datetime.timedelta(minutes=1)
-    start = end - datetime.timedelta(seconds=seconds)
-    online = not offline()
-
+def check_tasks(online):
+    '''The fetches behind the checks (key -> function), for run_tasks().
+       Shared with monitor.py, which runs the same checks on a schedule.'''
     tasks = {
         'files_table': lambda: fetch_table(os.environ['FILE_SHARING_TABLE'], {'file_id': {'S': '__health__'}}),
         'users_table': lambda: fetch_table(os.environ['USERS_TABLE'], {'email': {'S': '__health__@health.invalid'}}),
@@ -533,20 +532,19 @@ def health(range_key):
         'encryption': fetch_encryption,
     }
     if online:
-        tasks.update(api=fetch_stage, functions=fetch_functions, cleanup=fetch_cleanup, alarms=fetch_alarms,
-                     metrics=lambda: fetch_metrics(start, end, period), errors=lambda: fetch_errors(start))
+        tasks.update(api=fetch_stage, functions=fetch_functions, cleanup=fetch_cleanup, alarms=fetch_alarms)
+    return tasks
+
+
+def run_tasks(tasks):
+    '''Run every fetch in parallel: key -> Outcome.'''
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as pool:
         futures = {key: pool.submit(Outcome, fn) for key, fn in tasks.items()}
-        got = {key: future.result() for key, future in futures.items()}
+        return {key: future.result() for key, future in futures.items()}
 
-    series = got['metrics'].value if online and got['metrics'].error is None else None
-    storage_stats = None
-    if series:
-        size, objects = latest(series, 's3_size'), latest(series, 's3_objects')
-        if size or objects:
-            storage_stats = '{0} in {1:,.0f} objects'.format(human_bytes(size[1] if size else 0),
-                                                              objects[1] if objects else 0)
 
+def build_checks(got, online, storage_stats=None):
+    '''The check results, in the order the Health page shows them.'''
     checks = [
         check('api', 'API', got.get('api'), api_check),
         check('functions', 'Lambda functions', got.get('functions'), functions_check),
@@ -562,6 +560,32 @@ def health(range_key):
         for c in checks:
             if c['id'] == 'cleanup':
                 c['summary'] = 'Runs on AWS only (it reads the table’s change stream).'
+    return checks
+
+
+def health(range_key):
+    if range_key not in RANGES:
+        raise ValueError('range must be one of ' + ', '.join(RANGES))
+    seconds, period = RANGES[range_key]
+    now = datetime.datetime.now(datetime.timezone.utc)
+    end = now.replace(second=0, microsecond=0) + datetime.timedelta(minutes=1)
+    start = end - datetime.timedelta(seconds=seconds)
+    online = not offline()
+
+    tasks = check_tasks(online)
+    if online:
+        tasks.update(metrics=lambda: fetch_metrics(start, end, period), errors=lambda: fetch_errors(start))
+    got = run_tasks(tasks)
+
+    series = got['metrics'].value if online and got['metrics'].error is None else None
+    storage_stats = None
+    if series:
+        size, objects = latest(series, 's3_size'), latest(series, 's3_objects')
+        if size or objects:
+            storage_stats = '{0} in {1:,.0f} objects'.format(human_bytes(size[1] if size else 0),
+                                                              objects[1] if objects else 0)
+
+    checks = build_checks(got, online, storage_stats)
 
     api, functions = None, []
     if series is not None:

@@ -40,9 +40,13 @@ user_quota_bytes = 10737418240
 #     with one of them, then open the admin panel; you can make others admins there.
 admin_emails = [] # e.g. ["you@example.com"] (lowercase)
 
-# --- Alerts: CloudWatch alarm emails (Lambda errors, API 5xx). AWS sends a
-#     confirmation link to this address first. Empty = no email.
-alert_email = ""
+# --- Alerts: emails for errors in the logs, health check problems, CloudWatch
+#     alarms and failed deploys. AWS sends a confirmation link to this address
+#     first. Empty = no email.
+alert_email            = ""
+health_check_minutes   = 5        # 0 = no scheduled health check
+alert_cooldown_minutes = 15       # at most one error email per function in this time
+alert_utc_offset       = "+00:00" # time zone of the times in alert emails, e.g. "+05:30"
 
 # --- Encryption: 's3' (free), 'shared' (one KMS key), or 'per_user' (~$1/user/mo) ---
 kms_mode = "s3"
