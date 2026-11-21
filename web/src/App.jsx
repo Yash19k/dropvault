@@ -16,6 +16,7 @@ const AdminFiles = lazy(() => import('./pages/admin/Files'));
 const AdminLinks = lazy(() => import('./pages/admin/Links'));
 const AdminActivity = lazy(() => import('./pages/admin/Activity'));
 const AdminSystem = lazy(() => import('./pages/admin/System'));
+const AdminHealth = lazy(() => import('./pages/admin/Health'));
 
 function RequireAuth({ children }) {
   const { isAuthenticated, renewing } = useAuth();
@@ -59,6 +60,7 @@ export default function App() {
         <Route path="files" element={<RequireAdmin><AdminFiles /></RequireAdmin>} />
         <Route path="links" element={<RequireAdmin><AdminLinks /></RequireAdmin>} />
         <Route path="activity" element={<RequireAdmin><AdminActivity /></RequireAdmin>} />
+        <Route path="health" element={<RequireAdmin><AdminHealth /></RequireAdmin>} />
         <Route path="system" element={<RequireAdmin><AdminSystem /></RequireAdmin>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

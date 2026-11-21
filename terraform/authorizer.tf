@@ -68,6 +68,10 @@ resource "aws_api_gateway_gateway_response" "cors" {
   for_each      = toset(["DEFAULT_4XX", "DEFAULT_5XX"])
   rest_api_id   = aws_api_gateway_rest_api.api.id
   response_type = each.key
+  # API Gateway's own default body; declared so Terraform doesn't remove it on every apply
+  response_templates = {
+    "application/json" = "{\"message\":$context.error.messageString}"
+  }
   response_parameters = {
     "gatewayresponse.header.Access-Control-Allow-Origin"  = "'*'"
     "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,Authorization'"

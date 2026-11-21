@@ -39,8 +39,9 @@
 - **Admin panel** at `/admin` for the people you choose: totals and charts of sign-ups, uploads, links
   and downloads; every account, file and link, searchable and exportable as CSV; make admins, suspend
   accounts, set someone's storage limit, reset passwords, sign people out everywhere, delete accounts,
-  files and links; an activity feed with an audit log of every admin action; and system health (alarms,
-  API traffic, errors and Lambda timings from CloudWatch).
+  files and links; an activity feed with an audit log of every admin action; and a **Health** page that
+  checks every part of the system live (API, Lambda functions, tables, storage, email, encryption, upload
+  cleanup, alarms) and shows traffic, errors, latency and recent errors from the logs.
 - **Light and dark mode**, following your system setting or chosen manually.
 - **Encryption at rest:** SSE-S3 by default, or one KMS key for the app, or one KMS key **per user**.
 - **One-command deploy** with Terraform, and a **fully offline mode** using LocalStack.
@@ -103,7 +104,7 @@ Gateway caches the answer per token, so most requests skip it entirely.
 │   ├── share-file/            email one short link per recipient via SES
 │   ├── delete-user-file/      delete the object (or abort the upload), its record and its links
 │   ├── qr-link/               short links: create, list with stats, turn off, public redirect
-│   ├── admin/                 the admin panel's API (admins only, audit-logged)
+│   ├── admin/                 the admin panel's API (admins only, audit-logged) + health checks
 │   └── cleanup/               remove abandoned uploads from S3 (DynamoDB stream)
 ├── tests/                     pytest suite, runs against a mocked AWS (moto)
 ├── .github/workflows/ci.yml   lint + tests, terraform fmt/validate, web build
@@ -123,7 +124,7 @@ Gateway caches the answer per token, so most requests skip it entirely.
 ├── web/                       React 19 + Vite + Tailwind CSS 4 front end
 │   └── src/
 │       ├── pages/             Landing, Login, SignUp, dashboard/Files, dashboard/DashboardLayout,
-│       │                      admin/ (Overview, Users, UserDetail, Files, Links, Activity, System)
+│       │                      admin/ (Overview, Users, UserDetail, Files, Links, Activity, Health, System)
 │       ├── components/        UI primitives, toasts, auth layout
 │       ├── context/           AuthContext (session + automatic token renewal)
 │       ├── api/               auth and file API clients
@@ -259,7 +260,8 @@ saves the token and IDs for you.
 | `GET /admin/files/{file_id}/download` | `{download_url}` (5 minutes) |
 | `DELETE /admin/files/{file_id}`, `DELETE /admin/files/{file_id}/links`, `DELETE /admin/links/{code}` | delete a file, turn off its links, turn off one link |
 | `GET /admin/activity` | the latest 500 events: sign-ups, uploads, shares, downloads, admin actions |
-| `GET /admin/system` | configuration, record counts, and 24 hours of CloudWatch health |
+| `GET /admin/health?range=1h\|24h\|7d` | `{status, checks, api, functions, errors, alarms}`: live checks of each part, CloudWatch traffic for the range, recent log errors |
+| `GET /admin/system` | configuration and record counts |
 
 Admins can't change their own role, suspend, sign out, reset or delete their own account, or an owner
 admin's (`400` / `403`), so the panel can't lock everyone out.
@@ -289,6 +291,15 @@ an `AUDIT#` item (kept for a year) and shown in the activity feed. Most numbers 
 records themselves; downloads per day come from small daily counters (`STATS#<date>`), so they start
 counting when the admin panel is deployed. The admin views read whole tables, which is fine for tens of
 thousands of files; beyond that they would need pre-computed totals.
+
+**Health.** `GET /admin/health` runs every check in parallel when the page opens (and every minute while
+it stays open): the API Gateway stage, each Lambda function's state, both tables (status, TTL, stream, a
+timed read), the bucket (reachable, encrypted, public access blocked), the SES sender (verified, sandbox
+or production, daily quota), the KMS key(s), the cleanup trigger and the alarms. Each check is OK, needs
+attention, failing, or unknown when it couldn't run, and the page rolls them up into one status. It
+also reads CloudWatch for the chosen range (requests, 4xx/5xx, p90/p99 latency, per-function errors,
+throttles and timings) and the most recent errors in the functions' logs. Its IAM permissions are
+read-only and limited to this app's resources wherever AWS allows.
 
 **Uploads.** Files up to 100 MB go up in one presigned PUT. Bigger files use an S3 multipart upload: the
 API picks a part size (at least 16 MB, and big enough to stay within S3's 10,000 parts), the browser

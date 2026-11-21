@@ -16,7 +16,9 @@ function niceMax(value) {
 }
 
 // points: [{ key, short, label, value }]  short = axis label, label = tooltip / table label
-export function ColumnChart({ points, format = formatCount, title, emptyText = 'Nothing in this period' }) {
+// axisFormat: a shorter format for the axis labels (defaults to `format`).
+export function ColumnChart({ points, format = formatCount, axisFormat, title, emptyText = 'Nothing in this period' }) {
+  const axis = axisFormat || format;
   const [active, setActive] = useState(null);
   const liveId = useId();
   const peak = Math.max(0, ...points.map((p) => p.value));
@@ -36,7 +38,7 @@ export function ColumnChart({ points, format = formatCount, title, emptyText = '
     <div>
       <div className="flex">
         <div className="relative w-10 shrink-0 text-[11px] text-subtle tabular-nums" style={{ height: PLOT_HEIGHT }} aria-hidden="true">
-          <span className="absolute right-2 top-0 -translate-y-1/2">{format(max)}</span>
+          <span className="absolute right-2 top-0 -translate-y-1/2">{axis(max)}</span>
           <span className="absolute bottom-0 right-2 translate-y-1/2">0</span>
         </div>
         <div
@@ -94,7 +96,7 @@ export function ColumnChart({ points, format = formatCount, title, emptyText = '
 }
 
 // A chart in a card, with its total and a switch to a table of the same numbers.
-export function ChartCard({ title, total, note, points, format = formatCount, emptyText }) {
+export function ChartCard({ title, total, note, points, format = formatCount, axisFormat, emptyText }) {
   const [asTable, setAsTable] = useState(false);
   return (
     <section className="panel px-4 pb-3 pt-3.5">
@@ -123,7 +125,7 @@ export function ChartCard({ title, total, note, points, format = formatCount, em
             </table>
           </div>
         ) : (
-          <ColumnChart points={points} format={format} title={title} emptyText={emptyText} />
+          <ColumnChart points={points} format={format} axisFormat={axisFormat} title={title} emptyText={emptyText} />
         )}
       </div>
       {note && <p className="mt-2 text-[11px] text-subtle">{note}</p>}

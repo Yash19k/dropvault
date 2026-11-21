@@ -53,8 +53,9 @@ of `server.py`.
 Start with `-AdminEmail you@example.com` (or set `ADMIN_EMAILS` for
 `server.py`), sign up with that address, and **Admin** appears in the
 sidebar (`http://localhost:3001/admin`). From there you can make other
-accounts admins. Everything works offline except the health section of the
-System page, which reads CloudWatch.
+accounts admins. Everything works offline; on the Health page the tables,
+storage, email and encryption are checked against LocalStack, while the API
+Gateway, Lambda, CloudWatch and log checks exist only on AWS.
 
 Share emails are not delivered anywhere; open the SES page above to see them
 and click the download link.

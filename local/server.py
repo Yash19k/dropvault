@@ -164,6 +164,12 @@ def bootstrap_aws():
                 ddb.update_table(TableName=TABLE, AttributeDefinitions=TABLE_ATTRIBUTES,
                                  GlobalSecondaryIndexUpdates=[{'Create': index}])
 
+    # like terraform/dynamodb.tf: records with a `ttl` (unfinished uploads,
+    # expired links, old stats and audit entries) are removed after it
+    ttl = ddb.describe_time_to_live(TableName=TABLE).get('TimeToLiveDescription', {})
+    if ttl.get('TimeToLiveStatus') not in ('ENABLED', 'ENABLING'):
+        ddb.update_time_to_live(TableName=TABLE, TimeToLiveSpecification={'Enabled': True, 'AttributeName': 'ttl'})
+
     if USERS_TABLE not in ddb.list_tables().get('TableNames', []):
         ddb.create_table(TableName=USERS_TABLE, BillingMode='PAY_PER_REQUEST',
                          KeySchema=[{'AttributeName': 'email', 'KeyType': 'HASH'}],

@@ -21,7 +21,8 @@ so taking away someone's admin role takes effect at once.
   GET    /links                       every short link, with its status and downloads
   DELETE /links/{code}                turn off one link
   GET    /activity                    sign-ups, uploads, shares, downloads, admin actions
-  GET    /system                      configuration, data counts, CloudWatch health
+  GET    /system                      configuration and record counts
+  GET    /health?range=1h|24h|7d      live checks, CloudWatch metrics, recent errors (health.py)
 
 Admins can't demote, suspend, sign out, reset or delete their own account or
 an owner admin's (ADMIN_EMAILS), so the panel can never lock everyone out.
@@ -40,12 +41,12 @@ import time
 from collections import Counter, defaultdict
 
 import boto3
-from botocore.config import Config
 
 import accounts
 import api
 import auth
 import deletion
+import health
 import links
 import log
 import stats
@@ -546,89 +547,6 @@ def revoke_link(admin, code):
 
 
 # --- system --------------------------------------------------------------------
-def health():
-    '''Alarm states and the last 24 hours of API and Lambda metrics.'''
-    lambda_names = [n for n in (os.getenv('LAMBDA_NAMES') or '').split(',') if n]
-    api_name, stage, prefix = os.getenv('API_NAME'), os.getenv('API_STAGE'), os.getenv('ALARM_PREFIX')
-    if not (api_name and prefix):
-        return {'available': False, 'reason': "They read CloudWatch, which the offline version doesn't have."}
-    cloudwatch = boto3.client('cloudwatch', region_name=storage.region(),
-                              config=Config(retries={'max_attempts': 2}, connect_timeout=3, read_timeout=8))
-    end = datetime.datetime.now(datetime.timezone.utc).replace(minute=0, second=0, microsecond=0) \
-        + datetime.timedelta(hours=1)
-    start = end - datetime.timedelta(hours=24)
-    try:
-        alarms = []
-        for page in cloudwatch.get_paginator('describe_alarms').paginate(AlarmNamePrefix=prefix,
-                                                                          AlarmTypes=['MetricAlarm']):
-            for alarm in page.get('MetricAlarms', []):
-                updated = alarm.get('StateUpdatedTimestamp')
-                alarms.append({'name': alarm['AlarmName'], 'state': alarm.get('StateValue'),
-                               'description': alarm.get('AlarmDescription'), 'reason': alarm.get('StateReason'),
-                               'updated_at': int(updated.timestamp() * 1000) if updated else None})
-
-        queries = []
-
-        def metric(qid, namespace, name, dimensions, stat):
-            queries.append({'Id': qid, 'ReturnData': True, 'MetricStat': {
-                'Metric': {'Namespace': namespace, 'MetricName': name,
-                           'Dimensions': [{'Name': k, 'Value': v} for k, v in dimensions.items()]},
-                'Period': 3600, 'Stat': stat}})
-
-        api_dims = {'ApiName': api_name, 'Stage': stage or ''}
-        for qid, name, stat in (('api_count', 'Count', 'Sum'), ('api_4xx', '4XXError', 'Sum'),
-                                ('api_5xx', '5XXError', 'Sum'), ('api_latency', 'Latency', 'Average')):
-            metric(qid, 'AWS/ApiGateway', name, api_dims, stat)
-        for index, fn in enumerate(lambda_names):
-            for suffix, name, stat in (('inv', 'Invocations', 'Sum'), ('err', 'Errors', 'Sum'),
-                                       ('thr', 'Throttles', 'Sum'), ('dur', 'Duration', 'Average')):
-                metric('fn{0}_{1}'.format(index, suffix), 'AWS/Lambda', name, {'FunctionName': fn}, stat)
-
-        series = {}
-        for chunk in range(0, len(queries), 500):
-            kwargs = {'MetricDataQueries': queries[chunk:chunk + 500], 'StartTime': start, 'EndTime': end}
-            while True:
-                page = cloudwatch.get_metric_data(**kwargs)
-                for result in page.get('MetricDataResults', []):
-                    points = series.setdefault(result['Id'], {})
-                    for stamp, value in zip(result.get('Timestamps', []), result.get('Values', []), strict=True):
-                        points[int(stamp.timestamp() * 1000)] = value
-                if not page.get('NextToken'):
-                    break
-                kwargs['NextToken'] = page['NextToken']
-    except Exception as error:  # pylint: disable=broad-except
-        LOGGER.warning('CloudWatch unavailable: %s', error)
-        return {'available': False, 'reason': 'Could not read CloudWatch: {0}'.format(str(error)[:200])}
-
-    def total(qid):
-        return int(sum(series.get(qid, {}).values()))
-
-    def weighted_average(avg_id, weight_id):
-        averages, weights = series.get(avg_id, {}), series.get(weight_id, {})
-        weight = sum(weights.get(t, 0) for t in averages)
-        if not weight:
-            return round(sum(averages.values()) / len(averages), 1) if averages else None
-        return round(sum(v * weights.get(t, 0) for t, v in averages.items()) / weight, 1)
-
-    hours = [int((start + datetime.timedelta(hours=h)).timestamp() * 1000) for h in range(24)]
-    return {
-        'available': True,
-        'window_hours': 24,
-        'alarms': sorted(alarms, key=lambda a: (a['state'] == 'OK', a['name'])),
-        'api': {
-            'requests': total('api_count'), 'errors_4xx': total('api_4xx'), 'errors_5xx': total('api_5xx'),
-            'latency_ms': weighted_average('api_latency', 'api_count'),
-            'hourly': [{'hour': h, 'requests': int(series.get('api_count', {}).get(h, 0)),
-                        'errors': int(series.get('api_4xx', {}).get(h, 0) + series.get('api_5xx', {}).get(h, 0))}
-                       for h in hours],
-        },
-        'lambdas': [{'name': fn, 'invocations': total('fn{0}_inv'.format(i)), 'errors': total('fn{0}_err'.format(i)),
-                     'throttles': total('fn{0}_thr'.format(i)),
-                     'duration_ms': weighted_average('fn{0}_dur'.format(i), 'fn{0}_inv'.format(i))}
-                    for i, fn in enumerate(lambda_names)],
-    }
-
-
 def system(snap):
     def env_int(name):
         try:
@@ -654,7 +572,6 @@ def system(snap):
         'counts': {'users': len(snap.users), 'files': len(snap.files), 'links': len(snap.links),
                    'audit_entries': len(snap.audit), 'storage_counters': len(snap.usage),
                    'days_of_download_stats': len(snap.stats)},
-        'health': health(),
     }
 
 
@@ -675,6 +592,11 @@ def lambda_handler(event):
         return 200, {'events': events[:ACTIVITY_LIMIT], 'total': len(events)}
     if method == 'GET' and parts == ['system']:
         return 200, system(Snapshot())
+    if method == 'GET' and parts == ['health']:
+        range_key = api.query_param(event, 'range') or '24h'
+        if range_key not in health.RANGES:
+            raise api.ApiError(400, 'range must be one of: {0}'.format(', '.join(health.RANGES)))
+        return 200, health.health(range_key)
 
     if head == 'users':
         if size == 1 and method == 'GET':

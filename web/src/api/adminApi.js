@@ -13,6 +13,8 @@ export const adminApi = {
   links: get('/links'),
   activity: get('/activity'),
   system: get('/system'),
+  // range: '1h' | '24h' | '7d'
+  health: (range, token) => apiRequest('GET', `/admin/health?range=${enc(range)}`, { token }),
   user: (userId, token) => apiRequest('GET', `/admin/users/${enc(userId)}`, { token }),
 
   // changes: { role?: 'admin'|'user', suspended?: bool, quota_bytes?: number|null }

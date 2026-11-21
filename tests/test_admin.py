@@ -1,12 +1,15 @@
 '''The admin panel API (endpoints/admin), and the account rules behind it:
 roles, suspension, per-user storage limits, password resets.'''
 
+import io
 import json
+import time
+import zipfile
 
 import boto3
 import pytest
 
-from conftest import GB, call, forget, s3, table, upload_file
+from conftest import GB, call, event, forget, load, s3, table, upload_file
 
 ADMIN = ('admin', 'admin')
 
@@ -215,7 +218,6 @@ def test_admins_cannot_lock_themselves_or_owners_out(people, monkeypatch):
 
 def test_sign_out_and_password_reset(people):
     forget('auth-service', 'auth_service')
-    from conftest import load
     service = load('auth-service', 'auth_service')
 
     def login(password):
@@ -249,38 +251,144 @@ def test_delete_user_removes_everything_they_had(people):
     assert admin('DELETE', '/users/user-1')[0] == 404
 
 
-# --- system ----------------------------------------------------------------------
-def test_system_without_cloudwatch(people, monkeypatch):
+# --- system and health ----------------------------------------------------------------
+def test_system_reports_config_and_counts(people, monkeypatch):
     monkeypatch.setenv('ADMIN_EMAILS', 'boss@example.com')
     data = ok('GET', '/system')
     assert data['config']['owner_admins'] == ['boss@example.com']
     assert data['config']['default_quota_bytes'] == 10 * GB
     assert data['counts']['users'] == 3
-    assert data['health']['available'] is False
+    assert 'health' not in data
 
 
-def test_system_reads_alarms_and_metrics(people, monkeypatch):
-    monkeypatch.setenv('API_NAME', 'test-api')
-    monkeypatch.setenv('API_STAGE', 'dev')
-    monkeypatch.setenv('ALARM_PREFIX', 'test-')
-    monkeypatch.setenv('LAMBDA_NAMES', 'test-list,test-qr')
+def get_health(range_key=None):
+    ev = event('GET', '/v1/admin/health', user='admin-1', name='Boss', email='boss@example.com')
+    if range_key:
+        ev['queryStringParameters'] = {'range': range_key}
+    response = load(*ADMIN).lambda_handler(ev, None)
+    return response['statusCode'], json.loads(response['body'])
+
+
+def checks_of(data):
+    return {c['id']: c for c in data['checks']}
+
+
+def test_health_offline_runs_the_checks_it_can(people):
+    status, data = get_health()
+    assert status == 200 and data['offline'] is True and data['range'] == '24h'
+    checks = checks_of(data)
+    assert list(checks) == ['api', 'functions', 'files_table', 'users_table', 'storage', 'email', 'encryption',
+                            'cleanup', 'alarms']
+    for offline_only in ('api', 'functions', 'cleanup', 'alarms'):
+        assert checks[offline_only]['status'] == 'unknown'
+    # the test table has no TTL: unfinished uploads would never expire
+    assert checks['files_table']['status'] == 'warning' and 'TTL' in checks['files_table']['summary']
+    assert checks['users_table']['status'] == 'ok'
+    assert checks['storage']['status'] == 'ok' and checks['encryption']['status'] == 'ok'
+    assert checks['email']['status'] == 'ok'
+    assert data['status'] == 'warning'
+    assert data['api'] is None and data['errors'] is None
+
+    boto3.client('dynamodb').update_time_to_live(
+        TableName='files-test', TimeToLiveSpecification={'Enabled': True, 'AttributeName': 'ttl'})
+    assert get_health()[1]['status'] == 'ok'
+
+
+def test_health_bad_range(people):
+    assert get_health('1y')[0] == 400
+
+
+def make_function(name):
+    iam = boto3.client('iam')
+    role = iam.create_role(RoleName='health-test', AssumeRolePolicyDocument='{}')['Role']['Arn']
+    package = io.BytesIO()
+    with zipfile.ZipFile(package, 'w') as archive:
+        archive.writestr('handler.py', 'def handler(event, context):\n    return 1\n')
+    boto3.client('lambda').create_function(FunctionName=name, Runtime='python3.12', Role=role,
+                                           Handler='handler.handler', Code={'ZipFile': package.getvalue()})
+
+
+def test_health_on_aws(people, monkeypatch):
+    for key, value in {'API_NAME': 'test-api', 'API_ID': 'abc123', 'API_STAGE': 'dev', 'ALARM_PREFIX': 'test-',
+                       'LAMBDA_NAMES': 'test-list,test-gone,test-authorizer',
+                       'CLEANUP_FUNCTION': 'test-cleanup'}.items():
+        monkeypatch.setenv(key, value)
+    make_function('test-list')
+    s3_ = s3()
+    s3_.put_bucket_encryption(Bucket='files-bucket-test', ServerSideEncryptionConfiguration={
+        'Rules': [{'ApplyServerSideEncryptionByDefault': {'SSEAlgorithm': 'AES256'}}]})
+    s3_.put_public_access_block(Bucket='files-bucket-test', PublicAccessBlockConfiguration={
+        'BlockPublicAcls': True, 'IgnorePublicAcls': True, 'BlockPublicPolicy': True, 'RestrictPublicBuckets': True})
     cloudwatch = boto3.client('cloudwatch')
     cloudwatch.put_metric_alarm(AlarmName='test-list-errors', Namespace='AWS/Lambda', MetricName='Errors',
                                 Statistic='Sum', Period=300, EvaluationPeriods=1, Threshold=1,
                                 ComparisonOperator='GreaterThanOrEqualToThreshold')
+    cloudwatch.set_alarm_state(AlarmName='test-list-errors', StateValue='ALARM', StateReason='Threshold crossed')
     cloudwatch.put_metric_data(Namespace='AWS/ApiGateway', MetricData=[{
         'MetricName': 'Count', 'Value': 7, 'Dimensions': [{'Name': 'ApiName', 'Value': 'test-api'},
                                                           {'Name': 'Stage', 'Value': 'dev'}]}])
-    health = ok('GET', '/system')['health']
-    assert health['available'] is True
-    assert [a['name'] for a in health['alarms']] == ['test-list-errors']
-    assert health['api']['requests'] == 7 and len(health['api']['hourly']) == 24
-    assert [fn['name'] for fn in health['lambdas']] == ['test-list', 'test-qr']
+    # five expired tokens turned away: Lambda counts them as authorizer "errors"
+    cloudwatch.put_metric_data(Namespace='AWS/Lambda', MetricData=[{
+        'MetricName': 'Errors', 'Value': 5, 'Dimensions': [{'Name': 'FunctionName', 'Value': 'test-authorizer'}]}])
+    logs = boto3.client('logs')
+    logs.create_log_group(logGroupName='/aws/lambda/test-authorizer')
+    logs.create_log_stream(logGroupName='/aws/lambda/test-authorizer', logStreamName='a-1')
+    logs.put_log_events(logGroupName='/aws/lambda/test-authorizer', logStreamName='a-1', logEvents=[
+        {'timestamp': int(time.time() * 1000) - 30000,
+         'message': '[ERROR] Exception: Unauthorized\nTraceback (most recent call last):\n  File "/var/task/a.py"'}])
+    logs.create_log_group(logGroupName='/aws/lambda/test-list')
+    logs.create_log_stream(logGroupName='/aws/lambda/test-list', logStreamName='run-1')
+    at = int(time.time() * 1000) - 60000
+    logs.put_log_events(logGroupName='/aws/lambda/test-list', logStreamName='run-1', logEvents=[
+        {'timestamp': at, 'message': '2026-11-21 10:00:00,000 - handler - ERROR - unhandled error'},
+        {'timestamp': at + 1, 'message': 'Traceback (most recent call last):'},
+        {'timestamp': at + 2, 'message': '  File "handler.py", line 3, in handler'},
+        {'timestamp': at + 3, 'message': "KeyError: 'file_id'"},
+        {'timestamp': at + 5000, 'message': '2026-11-21 10:00:05,000 - handler - INFO - all good'},
+    ])
+    # an unhandled error as the Lambda runtime logs it: one event, several lines
+    logs.create_log_stream(logGroupName='/aws/lambda/test-list', logStreamName='run-2')
+    logs.put_log_events(logGroupName='/aws/lambda/test-list', logStreamName='run-2', logEvents=[
+        {'timestamp': at - 600000, 'message': "[ERROR] KeyError: 'x'\rTraceback (most recent call last):\r"
+                                              '  File "/var/task/list.py", line 9, in handler'}])
+    # the exception line doesn't look like an error on its own: found by reading
+    # the lines just after the "ERROR" line
+    logs.create_log_stream(logGroupName='/aws/lambda/test-list', logStreamName='run-3')
+    logs.put_log_events(logGroupName='/aws/lambda/test-list', logStreamName='run-3', logEvents=[
+        {'timestamp': at - 300000, 'message': '2026-11-21 09:55:00,000 - handler - ERROR - unhandled error'},
+        {'timestamp': at - 299500, 'message': 'botocore.errorfactory.MessageRejected: Email address is not verified.'},
+    ])
+
+    status, data = get_health('1h')
+    assert status == 200 and data['offline'] is False and data['range'] == '1h'
+    checks = checks_of(data)
+    assert checks['functions']['status'] == 'error' and 'gone' in checks['functions']['summary']
+    assert checks['alarms']['status'] == 'error' and 'list-errors' in checks['alarms']['summary']
+    assert checks['storage']['status'] == 'ok'
+    assert checks['email']['status'] == 'warning' and 'sandbox' in checks['email']['summary']
+    assert checks['cleanup']['status'] == 'error'          # no stream trigger in the mock
+    assert data['status'] == 'error'
+    assert [a['state'] for a in data['alarms']] == ['ALARM']
+
+    assert data['api']['requests'] == 7 and len(data['api']['series']) == 30
+    rows = {f['short']: f for f in data['functions']}
+    assert rows['list']['state'] == 'Active' and rows['gone']['state'] == 'Missing'
+    assert rows['list']['invocations'] == 0
+    assert rows['authorizer']['errors'] == 0 and rows['authorizer']['rejected'] == 5
+
+    # newest first; the authorizer's "Unauthorized" is a rejection, not an error
+    assert [e['function'] for e in data['errors']] == ['list', 'list', 'list']
+    assert data['errors'][1]['message'] == ('handler - ERROR - unhandled error · '
+                                            'botocore.errorfactory.MessageRejected: Email address is not verified.')
+    assert data['errors'][2]['message'] == "[ERROR] KeyError: 'x'"
+    error = data['errors'][0]
+    assert error['function'] == 'list' and error['at'] == at
+    assert 'unhandled error' in error['message'] and "KeyError: 'file_id'" in error['message']
+    assert 'Traceback' not in error['message'] and '2026-11-21' not in error['message']
 
 
 # --- the auth service side ------------------------------------------------------------
 def auth(path, body):
-    from conftest import load
     response = load('auth-service', 'auth_service').lambda_handler(
         {'httpMethod': 'POST', 'path': path, 'headers': {}, 'body': json.dumps(body)}, None)
     return response['statusCode'], json.loads(response['body'])

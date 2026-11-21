@@ -17,10 +17,14 @@ resource "aws_sns_topic_subscription" "alerts_email" {
 }
 
 locals {
+  # Not the authorizer: it answers every expired or invalid token by raising
+  # "Unauthorized" (how API Gateway is told to reply 401), which Lambda counts
+  # as an error, so its alarm would go off on ordinary sign-outs. If it really
+  # breaks, API Gateway answers 500 and the api_5xx alarm below catches it.
   all_lambda_names = concat(
     [for f in aws_lambda_function.fn : f.function_name],
     [aws_lambda_function.auth.function_name, aws_lambda_function.qr.function_name,
-    aws_lambda_function.authorizer.function_name, aws_lambda_function.admin.function_name],
+    aws_lambda_function.admin.function_name],
   )
 }
 

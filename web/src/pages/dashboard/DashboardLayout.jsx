@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  FolderClosed, LogOut, Menu, X, LayoutDashboard, Users, Files, Link2, History, Server,
+  FolderClosed, LogOut, Menu, X, LayoutDashboard, Users, Files, Link2, History, HeartPulse, Server,
 } from 'lucide-react';
 import { Logo } from '../../components/ui';
 import { ThemeToggle } from '../../theme';
@@ -14,6 +14,7 @@ const adminNav = [
   { to: '/admin/files', icon: Files, label: 'Files' },
   { to: '/admin/links', icon: Link2, label: 'Links' },
   { to: '/admin/activity', icon: History, label: 'Activity' },
+  { to: '/admin/health', icon: HeartPulse, label: 'Health' },
   { to: '/admin/system', icon: Server, label: 'System' },
 ];
 

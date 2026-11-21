@@ -23,6 +23,8 @@
   --danger-hover: #931a10;
   --danger-soft: #fcebe9;
   --danger-fg: #ffffff;
+  --warning: #b45309;
+  --warning-soft: #fdf2e2;
   --ring: rgb(14 107 94 / 0.25);
   --shadow-color: 24 24 20;
   color-scheme: light;
@@ -45,6 +47,8 @@
   --danger-hover: #f68c7e;
   --danger-soft: rgb(242 112 95 / 0.12);
   --danger-fg: #2a0905;
+  --warning: #f2b347;
+  --warning-soft: rgb(242 179 71 / 0.12);
   --ring: rgb(66 184 162 / 0.35);
   --shadow-color: 0 0 0;
   color-scheme: dark;
@@ -67,6 +71,8 @@
   --color-danger-hover: var(--danger-hover);
   --color-danger-soft: var(--danger-soft);
   --color-danger-fg: var(--danger-fg);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
   --color-ring: var(--ring);
 
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
