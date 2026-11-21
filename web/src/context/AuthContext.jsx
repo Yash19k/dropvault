@@ -21,7 +21,8 @@ function tokenExpiry(session) {
   return (session?.ts || 0) + 3600 * 1000;
 }
 
-const needsRenewal = (s) => Boolean(s) && tokenExpiry(s) - Date.now() <= RENEW_EARLY_MS;
+// Sessions from before roles existed renew once to learn theirs.
+const needsRenewal = (s) => Boolean(s) && (tokenExpiry(s) - Date.now() <= RENEW_EARLY_MS || !s.role);
 const withExpiry = (tokens) => Date.now() + (tokens.expires_in || 3600) * 1000;
 
 export function AuthProvider({ children }) {
@@ -45,9 +46,9 @@ export function AuthProvider({ children }) {
     else localStorage.removeItem(LS);
   }, [session]);
 
-  const expire = useCallback(() => {
+  const expire = useCallback((message) => {
     setSession(null);
-    setNotice('Your session expired. Please sign in again.');
+    setNotice(message || 'Your session expired. Please sign in again.');
   }, []);
 
   // Swap the refresh token for fresh tokens (deduplicated across callers).
@@ -62,10 +63,12 @@ export function AuthProvider({ children }) {
           ...s,
           tokens: { ...s.tokens, ...t, refresh_token: t.refresh_token || s.tokens.refresh_token },
           expiresAt: withExpiry(t),
+          role: t.role || s.role || 'user',
         });
         return true;
       })
-      .catch(() => { expire(); return false; })
+      // 403: the account was suspended (the message says so)
+      .catch((err) => { expire(err?.status === 403 ? err.message : undefined); return false; })
       .finally(() => { inFlight.current = null; setRenewing(false); });
     return inFlight.current;
   }, [expire]);
@@ -90,9 +93,10 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onRejected);
   }, [renew]);
 
+  // tokens is the sign-in / sign-up response, which also carries the role.
   const signIn = useCallback(({ email, name, userId, tokens }) => {
     setNotice('');
-    setSession({ email, name, userId, tokens, ts: Date.now(), expiresAt: withExpiry(tokens) });
+    setSession({ email, name, userId, tokens, role: tokens.role || 'user', ts: Date.now(), expiresAt: withExpiry(tokens) });
   }, []);
 
   const signOut = useCallback(async () => {
@@ -108,6 +112,7 @@ export function AuthProvider({ children }) {
   const value = {
     session,
     isAuthenticated: Boolean(session?.tokens?.id_token && session?.userId),
+    isAdmin: session?.role === 'admin',
     renewing,
     notice,
     signIn,

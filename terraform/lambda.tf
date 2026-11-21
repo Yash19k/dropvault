@@ -1,10 +1,11 @@
-# Function code is pure Python (deps live in the layers), so Terraform zips it
-# directly at plan time - no external build step for the functions.
+# Function code is pure Python (shared code and deps live in the layers), so
+# Terraform zips it directly at plan time - no external build step for it.
 data "archive_file" "fn" {
   for_each    = local.functions
   type        = "zip"
   source_dir  = "${path.module}/../endpoints/${each.value.dir}/src"
   output_path = "${path.module}/build/functions/${each.key}.zip"
+  excludes    = ["**/__pycache__/**"]
 }
 
 resource "aws_lambda_function" "fn" {
@@ -18,18 +19,12 @@ resource "aws_lambda_function" "fn" {
   role             = aws_iam_role.lambda.arn
   timeout          = 30
   memory_size      = 256
-  layers           = [for l in each.value.layers : aws_lambda_layer_version.layers[l].arn]
+  layers = concat([aws_lambda_layer_version.common.arn],
+  [for l in each.value.layers : aws_lambda_layer_version.layers[l].arn])
 
   environment {
     variables = merge(
-      {
-        AUTH_ENDPOINT      = local.auth_endpoint
-        FILE_SHARING_TABLE = aws_dynamodb_table.files.name
-        REGION             = var.aws_region
-        USER_FILES_BUCKET  = aws_s3_bucket.files.bucket
-        KMS_MODE           = var.kms_mode
-        KMS_ALIAS_PREFIX   = local.prefix
-      },
+      local.file_env,
       each.key == "share" ? {
         SENDER_EMAIL   = var.sender_email
         SENDER_SES_ARN = local.sender_ses_arn
@@ -37,6 +32,7 @@ resource "aws_lambda_function" "fn" {
       } : {}
     )
   }
+  depends_on = [aws_cloudwatch_log_group.fn]
 }
 
 resource "aws_cloudwatch_log_group" "fn" {

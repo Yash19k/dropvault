@@ -26,3 +26,41 @@ export function fileKind(name = '', contentType = '') {
   if (['doc', 'docx', 'txt', 'md', 'rtf', 'odt', 'xls', 'xlsx', 'csv', 'ppt', 'pptx'].includes(ext)) return 'document';
   return 'file';
 }
+
+// "just now", "5 min ago", "3 h ago", "2 days ago", then a date. Takes ms epoch.
+export function formatRelative(ms) {
+  if (!ms) return '';
+  const diff = (Date.now() - Number(ms)) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} h ago`;
+  if (diff < 7 * 86400) {
+    const days = Math.floor(diff / 86400);
+    return `${days} ${days === 1 ? 'day' : 'days'} ago`;
+  }
+  return new Date(Number(ms)).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// 1,284 (in full below 10,000), then 12.9K / 4.2M.
+export function formatCount(n) {
+  const v = Number(n) || 0;
+  if (Math.abs(v) < 10000) return v.toLocaleString();
+  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(v);
+}
+
+// "21 Nov 2026, 14:05" from a ms epoch.
+export function formatDateTime(ms) {
+  if (!ms) return '';
+  return new Date(Number(ms)).toLocaleString(undefined, {
+    day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+// "Nov 21" for a UTC day like "2026-11-21" (the admin stats are kept per UTC day).
+export function formatDay(day) {
+  const d = new Date(`${day}T00:00:00Z`);
+  if (isNaN(d.getTime())) return day;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+export const plural = (n, one, many = `${one}s`) => `${formatCount(n)} ${Number(n) === 1 ? one : many}`;

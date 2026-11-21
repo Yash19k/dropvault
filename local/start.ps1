@@ -1,7 +1,8 @@
 # Start DropVault fully offline: LocalStack (Docker) + local API + web app.
 #   powershell -ExecutionPolicy Bypass -File local\start.ps1            # kms_mode = s3
 #   powershell -ExecutionPolicy Bypass -File local\start.ps1 per_user   # one KMS key per user
-param([string]$KmsMode = "s3")
+#   ... -AdminEmail you@example.com     # that account (sign up with it) can open /admin
+param([string]$KmsMode = "s3", [string]$AdminEmail = "")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 
@@ -15,9 +16,9 @@ if (-not (Test-Path "$root\web\node_modules")) { Push-Location "$root\web"; npm 
 "VITE_AUTH_URL=http://localhost:4000`nVITE_FILE_URL=http://localhost:4000" |
     Out-File -Encoding ascii "$root\web\.env.local"
 
-# API in its own window (shows temp passwords and current MFA codes)
+# API in its own window (request log)
 Start-Process powershell -ArgumentList "-NoExit", "-Command",
-    "`$env:KMS_MODE='$KmsMode'; python -u '$PSScriptRoot\server.py'"
+    "`$env:KMS_MODE='$KmsMode'; `$env:ADMIN_EMAILS='$($AdminEmail.ToLower())'; python -u '$PSScriptRoot\server.py'"
 
 Push-Location "$root\web"
 npx vite --port 3001

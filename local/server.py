@@ -1,20 +1,25 @@
 #! /usr/bin/env python
 '''Offline backend for DropVault.
 
-One process on http://localhost:4000 that plays two roles:
+One process on http://localhost:4000 that plays API Gateway: it routes every
+request to the REAL Lambda handlers in ../endpoints (loaded unmodified, with
+the shared layer endpoints/common on the import path), with AWS calls pointed
+at LocalStack:
 
-  1. API Gateway: routes /v1/users/{user_id}/files... to the REAL Lambda handlers
-     in ../endpoints (loaded unmodified), with AWS calls pointed at LocalStack.
-  2. A simple stand-in auth service (replacing CognitoApi): sign-up with full
-     name + email + password, password login, and /v1/userinfo. No email
-     confirmation and no MFA.
+  /v1/users, /v1/login, /v1/refresh-token, /v1/logout, /v1/userinfo -> auth-service
+  /v1/users/{user_id}/files/...                                    -> the file Lambdas
+  /v1/admin/...                                                    -> admin
+  /v1/d/{code}                                                     -> qr-link (public)
 
-On start it creates the S3 bucket (+ CORS), the DynamoDB table and the SES
-sender identity in LocalStack. Users are kept in local/.data/auth.json.
+Like API Gateway, it runs the real authorizer Lambda before a protected route
+and passes the caller to the handler in requestContext.authorizer.
+
+On start it creates the S3 bucket (+ CORS), the files and users tables and the
+SES sender identity in LocalStack. Accounts from older versions of this server
+(local/.data/auth.json) are copied into the users table. Set ADMIN_EMAILS
+(comma-separated) to make those accounts admins of the admin panel.
 '''
 
-import hashlib
-import hmac
 import importlib.util
 import json
 import os
@@ -25,7 +30,6 @@ import sys
 import threading
 import time
 import urllib.parse
-import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.getenv('PORT', '4000'))
@@ -33,10 +37,29 @@ LOCALSTACK = os.getenv('LOCALSTACK_URL', 'http://localhost:4566')
 REGION = 'eu-west-1'
 BUCKET = 'enclave-files-local'
 TABLE = 'enclave-files-local'
+USERS_TABLE = 'enclave-users-local'
 SENDER = 'no-reply@enclave.local'
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENDPOINTS = os.path.join(HERE, '..', 'endpoints')
-DATA_FILE = os.path.join(HERE, '.data', 'auth.json')
+COMMON = os.path.join(ENDPOINTS, 'common', 'python')   # the shared Lambda layer
+sys.path.insert(0, COMMON)
+DATA_DIR = os.path.join(HERE, '.data')
+LEGACY_USERS = os.path.join(DATA_DIR, 'auth.json')   # accounts of the old stand-in auth service
+
+
+def token_secret():
+    '''The key that signs session tokens, kept so sessions survive a restart.'''
+    path = os.path.join(DATA_DIR, 'token_secret')
+    try:
+        with open(path) as handle:
+            return handle.read().strip()
+    except FileNotFoundError:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        secret = secrets.token_urlsafe(36)
+        with open(path, 'w') as handle:
+            handle.write(secret)
+        return secret
+
 
 # ---------------------------------------------------------------------------
 # Environment the Lambdas expect (as Terraform would set it), aimed at LocalStack
@@ -48,6 +71,9 @@ os.environ.update({
     'AWS_ENDPOINT_URL': LOCALSTACK,
     'REGION': REGION,
     'FILE_SHARING_TABLE': TABLE,
+    'USERS_TABLE': USERS_TABLE,
+    'TOKEN_SECRET': token_secret(),
+    'APP_ENV': 'local',
     'USER_FILES_BUCKET': BUCKET,
     # 127.0.0.1, not localhost: on Windows Python tries ::1 first and stalls ~2s
     'AUTH_ENDPOINT': 'http://127.0.0.1:{0}'.format(PORT),
@@ -57,7 +83,9 @@ os.environ.update({
     'PUBLIC_API_URL': 'http://localhost:{0}'.format(PORT),  # base of QR short links
     'KMS_ALIAS_PREFIX': 'enclave-local',
 })
+os.environ.setdefault('USER_QUOTA_BYTES', str(10 * 1024 ** 3))   # 10 GiB, like the AWS default
 os.environ.setdefault('KMS_MODE', 's3')
+os.environ.setdefault('ADMIN_EMAILS', '')
 
 import boto3  # noqa: E402  (after env is set)
 from botocore.config import Config  # noqa: E402
@@ -79,8 +107,25 @@ boto3.client = _local_client
 
 
 # ---------------------------------------------------------------------------
-# LocalStack bootstrap
+# LocalStack bootstrap (the table mirrors terraform/dynamodb.tf)
 # ---------------------------------------------------------------------------
+TABLE_ATTRIBUTES = [
+    {'AttributeName': 'file_id', 'AttributeType': 'S'},
+    {'AttributeName': 'user_id', 'AttributeType': 'S'},
+    {'AttributeName': 'uploaded_at', 'AttributeType': 'S'},
+    {'AttributeName': 'target_file_id', 'AttributeType': 'S'},
+    {'AttributeName': 'created_at', 'AttributeType': 'N'},
+]
+TABLE_INDEXES = [
+    {'IndexName': 'user-files', 'Projection': {'ProjectionType': 'ALL'},
+     'KeySchema': [{'AttributeName': 'user_id', 'KeyType': 'HASH'},
+                   {'AttributeName': 'uploaded_at', 'KeyType': 'RANGE'}]},
+    {'IndexName': 'file-links', 'Projection': {'ProjectionType': 'ALL'},
+     'KeySchema': [{'AttributeName': 'target_file_id', 'KeyType': 'HASH'},
+                   {'AttributeName': 'created_at', 'KeyType': 'RANGE'}]},
+]
+
+
 def bootstrap_aws():
     for attempt in range(60):
         try:
@@ -108,22 +153,62 @@ def bootstrap_aws():
     if TABLE not in ddb.list_tables().get('TableNames', []):
         ddb.create_table(TableName=TABLE, BillingMode='PAY_PER_REQUEST',
                          KeySchema=[{'AttributeName': 'file_id', 'KeyType': 'HASH'}],
-                         AttributeDefinitions=[{'AttributeName': 'file_id', 'AttributeType': 'S'}])
+                         AttributeDefinitions=TABLE_ATTRIBUTES, GlobalSecondaryIndexes=TABLE_INDEXES)
         ddb.get_waiter('table_exists').wait(TableName=TABLE)
+    else:
+        # a table from before the indexes existed: add the missing ones
+        have = {i['IndexName'] for i in ddb.describe_table(TableName=TABLE)['Table']
+                .get('GlobalSecondaryIndexes', [])}
+        for index in TABLE_INDEXES:
+            if index['IndexName'] not in have:
+                ddb.update_table(TableName=TABLE, AttributeDefinitions=TABLE_ATTRIBUTES,
+                                 GlobalSecondaryIndexUpdates=[{'Create': index}])
+
+    if USERS_TABLE not in ddb.list_tables().get('TableNames', []):
+        ddb.create_table(TableName=USERS_TABLE, BillingMode='PAY_PER_REQUEST',
+                         KeySchema=[{'AttributeName': 'email', 'KeyType': 'HASH'}],
+                         AttributeDefinitions=[{'AttributeName': 'email', 'AttributeType': 'S'}])
+        ddb.get_waiter('table_exists').wait(TableName=USERS_TABLE)
+    import_legacy_users()
 
     boto3.client('ses', region_name=REGION).verify_email_identity(EmailAddress=SENDER)
     print('[aws] LocalStack ready: bucket={0} table={1} kms_mode={2}'.format(
         BUCKET, TABLE, os.environ['KMS_MODE']))
+    if os.environ['ADMIN_EMAILS']:
+        print('[api] Admins: {0} (admin panel at http://localhost:3001/admin)'.format(os.environ['ADMIN_EMAILS']))
+
+
+def import_legacy_users():
+    '''Copy accounts made by the old stand-in auth service into the users table
+       (same user ids and password hashes, so sign-ins and files carry over).'''
+    try:
+        with open(LEGACY_USERS) as handle:
+            legacy = json.load(handle).get('users', {})
+    except (FileNotFoundError, ValueError):
+        return
+    users = boto3.resource('dynamodb', region_name=REGION).Table(USERS_TABLE)
+    copied = 0
+    for user in legacy.values():
+        if not (user.get('email') and user.get('user_id') and user.get('password')):
+            continue
+        try:
+            # no created_at: the old server didn't record when they signed up
+            users.put_item(Item={'email': user['email'], 'user_id': user['user_id'], 'name': user.get('name') or '',
+                                 'password': user['password']},
+                           ConditionExpression='attribute_not_exists(email)')
+            copied += 1
+        except users.meta.client.exceptions.ConditionalCheckFailedException:
+            pass
+    if copied:
+        print('[auth] Copied {0} account(s) from {1}'.format(copied, LEGACY_USERS))
 
 
 # ---------------------------------------------------------------------------
-# Load the six Lambda handlers. Each has its own auth/log/constants modules
-# with clashing names, so they are imported one directory at a time.
+# Load the Lambda handlers. Shared code comes from endpoints/common (on
+# sys.path above), just like the Lambda layer on AWS.
 # ---------------------------------------------------------------------------
 def load_handler(folder, module):
     src = os.path.join(ENDPOINTS, folder, 'src')
-    for shared in ('auth', 'log', 'constants', 'links'):
-        sys.modules.pop(shared, None)
     sys.path.insert(0, src)
     try:
         spec = importlib.util.spec_from_file_location(
@@ -136,140 +221,44 @@ def load_handler(folder, module):
 
 
 SEG = r'([^/]+)'
-FILE_ROUTES = [
-    ('POST', r'^/v1/users/{0}/files$'.format(SEG), ('upload-file', 'upload_file')),
-    ('GET', r'^/v1/users/{0}/files$'.format(SEG), ('get-user-files', 'get_user_files')),
-    ('POST', r'^/v1/users/{0}/files/{0}/complete$'.format(SEG), ('complete-upload', 'complete_upload')),
-    ('GET', r'^/v1/users/{0}/files/{0}/download$'.format(SEG), ('download-file', 'download_file')),
-    ('POST', r'^/v1/users/{0}/files/{0}/share$'.format(SEG), ('share-file', 'share_file')),
-    ('DELETE', r'^/v1/users/{0}/files/{0}$'.format(SEG), ('delete-user-file', 'delete_user_file')),
-    ('POST', r'^/v1/users/{0}/files/{0}/qr$'.format(SEG), ('qr-link', 'qr_link')),
-    ('DELETE', r'^/v1/users/{0}/files/{0}/qr$'.format(SEG), ('qr-link', 'qr_link')),
-    ('GET', r'^/v1/d/{0}$'.format(SEG), ('qr-link', 'qr_link')),
-]
+PUBLIC = False      # no authorizer (anyone may open it)
+PROTECTED = True    # runs the authorizer first, like on AWS
+AUTH = ('auth-service', 'auth_service')
+ADMIN = ('admin', 'admin')
+ROUTES = [
+    ('POST', r'^/v1/users$', AUTH, PUBLIC),
+    ('POST', r'^/v1/login$', AUTH, PUBLIC),
+    ('POST', r'^/v1/refresh-token$', AUTH, PUBLIC),
+    ('POST', r'^/v1/logout$', AUTH, PUBLIC),
+    ('GET', r'^/v1/userinfo$', AUTH, PUBLIC),
+    ('POST', r'^/v1/users/{0}/files$'.format(SEG), ('upload-file', 'upload_file'), PROTECTED),
+    ('POST', r'^/v1/users/{0}/files/{0}/parts$'.format(SEG), ('upload-file', 'upload_file'), PROTECTED),
+    ('GET', r'^/v1/users/{0}/files$'.format(SEG), ('get-user-files', 'get_user_files'), PROTECTED),
+    ('POST', r'^/v1/users/{0}/files/{0}/complete$'.format(SEG), ('complete-upload', 'complete_upload'), PROTECTED),
+    ('GET', r'^/v1/users/{0}/files/{0}/download$'.format(SEG), ('download-file', 'download_file'), PROTECTED),
+    ('POST', r'^/v1/users/{0}/files/{0}/share$'.format(SEG), ('share-file', 'share_file'), PROTECTED),
+    ('DELETE', r'^/v1/users/{0}/files/{0}$'.format(SEG), ('delete-user-file', 'delete_user_file'), PROTECTED),
+    ('POST', r'^/v1/users/{0}/files/{0}/qr$'.format(SEG), ('qr-link', 'qr_link'), PROTECTED),
+    ('DELETE', r'^/v1/users/{0}/files/{0}/qr$'.format(SEG), ('qr-link', 'qr_link'), PROTECTED),
+    ('GET', r'^/v1/users/{0}/files/{0}/links$'.format(SEG), ('qr-link', 'qr_link'), PROTECTED),
+    ('DELETE', r'^/v1/users/{0}/files/{0}/links/{0}$'.format(SEG), ('qr-link', 'qr_link'), PROTECTED),
+    ('GET', r'^/v1/d/{0}$'.format(SEG), ('qr-link', 'qr_link'), PUBLIC),
+    ('POST', r'^/v1/d/{0}$'.format(SEG), ('qr-link', 'qr_link'), PUBLIC),
+] + [(method, r'^/v1/admin/.+$', ADMIN, PROTECTED) for method in ('GET', 'POST', 'PATCH', 'DELETE')]
 HANDLERS = {}
+AUTHORIZER = ('authorizer', 'authorizer')
+METHOD_ARN = 'arn:aws:execute-api:{0}:000000000000:local/local/GET/v1'.format(REGION)
 
 
-# ---------------------------------------------------------------------------
-# Stand-in auth service (CognitoApi-compatible shapes used by web/src)
-# ---------------------------------------------------------------------------
-LOCK = threading.Lock()
-
-
-def load_db():
+def authorize(authorization):
+    '''What API Gateway does before a protected route: run the authorizer
+       Lambda. Returns the caller {user_id, name, email}, or None.'''
     try:
-        with open(DATA_FILE) as handle:
-            return json.load(handle)
-    except (FileNotFoundError, ValueError):
-        return {'users': {}, 'tokens': {}}
+        result = HANDLERS[AUTHORIZER]({'authorizationToken': authorization or '', 'methodArn': METHOD_ARN}, None)
+    except Exception:  # "Unauthorized"
+        return None
+    return result['context']
 
-
-DB = load_db()
-
-
-def save_db():
-    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-    with open(DATA_FILE, 'w') as handle:
-        json.dump(DB, handle, indent=2)
-
-
-def hash_password(password, salt=None):
-    salt = salt or secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 200000).hex()
-    return salt + '$' + digest
-
-
-def check_password(password, stored):
-    salt = stored.split('$', 1)[0]
-    return hmac.compare_digest(hash_password(password, salt), stored)
-
-
-def find_user(email):
-    email = (email or '').strip().lower()
-    for user in DB['users'].values():
-        if user['email'] == email:
-            return user
-    return None
-
-
-class AuthError(Exception):
-    def __init__(self, status, message):
-        super().__init__(message)
-        self.status = status
-
-
-def issue_tokens(user):
-    tokens = {
-        'id_token': 'id-' + secrets.token_urlsafe(32),
-        'access_token': 'ac-' + secrets.token_urlsafe(32),
-        'refresh_token': 'rf-' + secrets.token_urlsafe(32),
-        'token_type': 'Bearer',
-        'expires_in': 3600,
-    }
-    for kind in ('id_token', 'access_token'):
-        DB['tokens'][tokens[kind]] = user['user_id']
-    DB['tokens'][tokens['refresh_token']] = 'refresh:' + user['user_id']
-    return tokens
-
-
-def auth_route(method, path, body, headers):
-    '''Returns (status, payload) or None when the path is not an auth route.'''
-    with LOCK:
-        # Sign up: full name + email + password -> account is active immediately
-        # and the caller is signed in (tokens returned). No email, no MFA.
-        if method == 'POST' and path == '/v1/users':
-            email = (body.get('email') or '').strip().lower()
-            name = (body.get('full_name') or '').strip()
-            password = body.get('password') or ''
-            if not name or not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
-                raise AuthError(400, 'Full name and a valid email are required')
-            if len(password) < 8:
-                raise AuthError(400, 'Password must be at least 8 characters')
-            if find_user(email):
-                raise AuthError(409, 'An account with this email already exists')
-            user = {'user_id': str(uuid.uuid4()), 'email': email, 'name': name,
-                    'password': hash_password(password)}
-            DB['users'][user['user_id']] = user
-            tokens = issue_tokens(user)
-            save_db()
-            print('[auth] New account: {0}'.format(email), flush=True)
-            return 201, dict(tokens, user_id=user['user_id'], email=email)
-
-        # Sign in: email + password -> tokens
-        if method == 'POST' and path == '/v1/login':
-            user = find_user(body.get('email'))
-            if not user or not user.get('password') or not check_password(
-                    body.get('password') or '', user['password']):
-                raise AuthError(401, 'Incorrect email or password')
-            tokens = issue_tokens(user)
-            save_db()
-            return 200, tokens
-
-        if method == 'POST' and path == '/v1/refresh-token':
-            owner = DB['tokens'].get(body.get('refresh_token') or '', '')
-            user = DB['users'].get(owner.replace('refresh:', '', 1)) if owner.startswith('refresh:') else None
-            if not user:
-                raise AuthError(401, 'Invalid refresh token')
-            tokens = issue_tokens(user)
-            save_db()
-            return 200, tokens
-
-        if method == 'POST' and path == '/v1/logout':
-            user_id = DB['tokens'].get(body.get('access_token') or '')
-            if user_id:
-                DB['tokens'] = {t: u for t, u in DB['tokens'].items()
-                                if u not in (user_id, 'refresh:' + user_id)}
-                save_db()
-            return 200, {'message': 'Logged out'}
-
-        if method == 'GET' and path == '/v1/userinfo':
-            token = (headers.get('authorization') or '').replace('Bearer ', '', 1).strip()
-            user = DB['users'].get(DB['tokens'].get(token, ''))
-            if not user:
-                raise AuthError(401, 'Unauthorized')
-            return 200, {'user_id': user['user_id'], 'name': user['name'],
-                         'email': user['email'], 'phone_number': user.get('phone')}
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +266,7 @@ def auth_route(method, path, body, headers):
 # ---------------------------------------------------------------------------
 CORS = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': '*',
 }
 
@@ -286,8 +275,7 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
     def log_message(self, fmt, *args):
-        if '/v1/userinfo' not in self.path:  # the Lambdas call this on every request
-            sys.stderr.write('[http] ' + (fmt % args) + '\n')
+        sys.stderr.write('[http] ' + (fmt % args) + '\n')
 
     def send(self, status, payload, extra_headers=None):
         data = payload if isinstance(payload, (bytes, bytearray)) else json.dumps(payload).encode()
@@ -305,47 +293,42 @@ class Handler(BaseHTTPRequestHandler):
         self.send(204, b'')
 
     def handle_any(self):
-        path = urllib.parse.urlsplit(self.path).path.rstrip('/') or '/'
+        url = urllib.parse.urlsplit(self.path)
+        path = url.path.rstrip('/') or '/'
         length = int(self.headers.get('Content-Length') or 0)
         raw = self.rfile.read(length).decode() if length else ''
         headers = {k.lower(): v for k, v in self.headers.items()}
 
-        # File API -> real Lambda handlers
-        for method, pattern, (folder, module) in FILE_ROUTES:
-            if self.command == method and re.match(pattern, path):
-                event = {
-                    'httpMethod': method,
-                    'path': path,
-                    'headers': {'Authorization': headers.get('authorization'),
-                                'Content-Type': headers.get('content-type')},
-                    'body': raw or None,
-                }
-                result = HANDLERS[(folder, module)](event, None)
-                body = result.get('body') or ''
-                self.send(result['statusCode'], body.encode(), result.get('headers') or {})
-                return
-
-        # Auth service
-        try:
-            body = json.loads(raw) if raw else {}
-            result = auth_route(self.command, path, body, headers)
-        except AuthError as error:
-            self.send(error.status, {'message': str(error)})
+        for method, pattern, target, protected in ROUTES:
+            if self.command != method or not re.match(pattern, path):
+                continue
+            event = {
+                'httpMethod': method,
+                'path': path,
+                'headers': {'Authorization': headers.get('authorization'),
+                            'Content-Type': headers.get('content-type')},
+                'queryStringParameters': dict(urllib.parse.parse_qsl(url.query)) or None,
+                'body': raw or None,
+                'requestContext': {},
+            }
+            if protected:
+                caller = authorize(headers.get('authorization'))
+                if not caller:
+                    self.send(401, {'message': 'Unauthorized'})
+                    return
+                event['requestContext']['authorizer'] = caller
+            result = HANDLERS[target](event, None)
+            body = result.get('body') or ''
+            self.send(result['statusCode'], body.encode(), result.get('headers') or {})
             return
-        except ValueError:
-            self.send(400, {'message': 'Invalid JSON body'})
-            return
-        if result is None:
-            self.send(404, {'message': 'Not found: {0} {1}'.format(self.command, path)})
-        else:
-            self.send(*result)
+        self.send(404, {'message': 'Not found: {0} {1}'.format(self.command, path)})
 
-    do_GET = do_POST = do_PUT = do_DELETE = handle_any
+    do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = handle_any
 
 
 def main():
     bootstrap_aws()
-    for _method, _pattern, target in FILE_ROUTES:
+    for target in [route[2] for route in ROUTES] + [AUTHORIZER]:
         if target not in HANDLERS:
             HANDLERS[target] = load_handler(*target)
     # Listen on both loopbacks so "localhost" is instant whether it resolves to

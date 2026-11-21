@@ -20,3 +20,20 @@ resource "aws_lambda_layer_version" "layers" {
   compatible_runtimes = [var.lambda_runtime]
   depends_on          = [null_resource.layers_build]
 }
+
+# Code shared by every Lambda (endpoints/common/python: auth, api, storage,
+# links, usage, tokens, ...). Lambda puts a layer's python/ folder on the
+# import path, so the handlers simply `import storage`.
+data "archive_file" "common" {
+  type        = "zip"
+  source_dir  = "${path.module}/../endpoints/common"
+  output_path = "${path.module}/build/common/common.zip"
+  excludes    = ["**/__pycache__/**"]
+}
+
+resource "aws_lambda_layer_version" "common" {
+  layer_name          = "${local.prefix}-common"
+  filename            = data.archive_file.common.output_path
+  source_code_hash    = data.archive_file.common.output_base64sha256
+  compatible_runtimes = [var.lambda_runtime]
+}

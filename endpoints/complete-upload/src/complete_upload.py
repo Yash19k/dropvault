@@ -1,89 +1,85 @@
-#! /usr/bin/env python
-'''Mark a file upload as complete (status READY) once the browser has finished
-   the presigned S3 PUT. Confirms the object exists and records its real size.'''
+'''Finish an upload once the browser has sent the bytes to S3.
 
-import os
-import json
-import collections
-import boto3
-import auth
+  POST /v1/users/{user_id}/files/{file_id}/complete
+
+For a multipart upload this stitches the parts together in S3 (the server
+lists the parts itself, so the browser doesn't need to report ETags). It then
+records the real size, counts it against the user's storage quota, and marks
+the file READY. A file that doesn't fit in the quota is deleted and 413 is
+returned. Calling it again for a READY file is harmless.
+'''
+
+from botocore.exceptions import ClientError
+
+import api
 import log
-
+import storage
+import usage
 
 LOGGER = log.setup_logging()
 
-CORS_HEADERS = {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Allow': 'POST, OPTIONS',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': '*'
-}
 
-
-def get_file(user_id, file_id):
-    '''Fetch the file record and confirm ownership.'''
-    dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table(os.environ['FILE_SHARING_TABLE'])
-    item = table.get_item(Key={'file_id': file_id}).get('Item')
-    if not item or item.get('user_id') != user_id:
-        return None
-    return item
-
-
-def is_user_authorized(user_id, event):
-    '''The {user_id} in the path must match the token's user.'''
-    return auth.path_param(event, 'user_id', 3) == user_id
-
-
-def mark_ready(file_item, conf_values):
-    '''Confirm the object exists in S3, store its real size and flip to READY.'''
-    key = '{0}/{1}/{2}'.format(file_item['user_id'], file_item['file_id'], file_item['file_name'])
-    s3_client = boto3.client('s3', conf_values['REGION'])
-    head = s3_client.head_object(Bucket=os.environ['USER_FILES_BUCKET'], Key=key)
-    size = head.get('ContentLength', file_item.get('size', 0))
-
-    dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table(os.environ['FILE_SHARING_TABLE'])
-    table.update_item(
-        Key={'file_id': file_item['file_id']},
-        UpdateExpression='SET #s = :ready, size = :size',
-        ExpressionAttributeNames={'#s': 'status'},
-        ExpressionAttributeValues={':ready': 'READY', ':size': int(size)}
-    )
-    return int(size)
-
-
-def init_env_vars():
-    '''Get all environment variables.'''
-    return {'REGION': os.getenv('REGION')}
-
-
-def lambda_handler(event, _):
-    '''Lambda entrypoint.'''
+def finish_multipart(item):
+    '''Combine the uploaded parts into the final object.'''
+    s3 = storage.s3()
+    kwargs = {'Bucket': storage.bucket(), 'Key': storage.object_key(item), 'UploadId': item['upload_id']}
+    parts = []
     try:
-        conf_values = init_env_vars()
-        user_id, _name, _email = auth.resolve_event_user(event)
-        if not user_id:
-            return {'statusCode': 401, 'body': json.dumps({'message': 'Unauthorized'}),
-                    'headers': CORS_HEADERS}
-        file_id = auth.path_param(event, 'file_id', 5)
-        if not is_user_authorized(user_id, event):
-            return {'statusCode': 403,
-                    'body': json.dumps({'message': 'User not authorized to perform this action'}),
-                    'headers': CORS_HEADERS}
-        file_item = get_file(user_id, file_id)
-        if not file_item:
-            return {'statusCode': 404, 'body': json.dumps({'error_message': 'File not found'}),
-                    'headers': CORS_HEADERS}
-        size = mark_ready(file_item, conf_values)
-        body = collections.OrderedDict()
-        body['file_id'] = file_id
-        body['size'] = size
-        body['status'] = 'READY'
-        return {'statusCode': 200, 'body': json.dumps(body),
-                'headers': CORS_HEADERS, 'isBase64Encoded': False}
-    except Exception as error:
-        LOGGER.error({'error_message': '{}'.format(error)})
-        return {'statusCode': 500, 'body': json.dumps({'error_message': 'Internal server error'}),
-                'headers': CORS_HEADERS, 'isBase64Encoded': False}
+        while True:
+            page = s3.list_parts(**kwargs)
+            parts.extend({'PartNumber': p['PartNumber'], 'ETag': p['ETag']} for p in page.get('Parts', []))
+            if not page.get('IsTruncated'):
+                break
+            kwargs['PartNumberMarker'] = page['NextPartNumberMarker']
+    except ClientError as error:
+        if error.response.get('Error', {}).get('Code') == 'NoSuchUpload':
+            raise api.ApiError(410, 'This upload has expired. Start it again.') from None
+        raise
+    have = {p['PartNumber'] for p in parts}
+    missing = [n for n in range(1, int(item['part_count']) + 1) if n not in have]
+    if missing:
+        raise api.ApiError(409, 'Some parts have not been uploaded yet', missing_parts=missing[:100])
+    s3.complete_multipart_upload(MultipartUpload={'Parts': sorted(parts, key=lambda p: p['PartNumber'])},
+                                 **{k: kwargs[k] for k in ('Bucket', 'Key', 'UploadId')})
+
+
+def discard(item):
+    '''Remove a file that can't be kept (over quota).'''
+    storage.s3().delete_object(Bucket=storage.bucket(), Key=storage.object_key(item))
+    storage.table().delete_item(Key={'file_id': item['file_id']})
+
+
+@api.route('POST, OPTIONS')
+def lambda_handler(event):
+    (user_id, _name, _email), item = api.owned_file(event)
+    if item.get('status') == 'READY':
+        return 200, {'file_id': item['file_id'], 'status': 'READY', 'size': int(item.get('size', 0))}
+
+    if item.get('upload_id'):
+        finish_multipart(item)
+    try:
+        size = int(storage.s3().head_object(Bucket=storage.bucket(),
+                                            Key=storage.object_key(item))['ContentLength'])
+    except ClientError as error:
+        if error.response.get('Error', {}).get('Code') in ('404', 'NoSuchKey', 'NotFound'):
+            raise api.ApiError(409, 'The file has not reached storage yet') from None
+        raise
+
+    try:
+        usage.add(user_id, size)
+    except usage.QuotaExceeded:
+        discard(item)
+        raise api.ApiError(413, 'Not enough storage space for this file',
+                           used_bytes=usage.used_bytes(user_id), quota_bytes=usage.quota_bytes(user_id)) from None
+
+    table = storage.table()
+    try:
+        table.update_item(
+            Key={'file_id': item['file_id']},
+            UpdateExpression='SET #s = :ready, #sz = :size REMOVE #t, upload_id, part_size, part_count',
+            ConditionExpression='#s = :uploading',
+            ExpressionAttributeNames={'#s': 'status', '#t': 'ttl', '#sz': 'size'},
+            ExpressionAttributeValues={':ready': 'READY', ':uploading': 'UPLOADING', ':size': size})
+    except table.meta.client.exceptions.ConditionalCheckFailedException:
+        usage.release(user_id, size)   # a parallel call already completed (and counted) it
+    return 200, {'file_id': item['file_id'], 'status': 'READY', 'size': size}

@@ -2,25 +2,15 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   Upload, Search, RefreshCw, Download, Mail, Link2, Trash2, X, Send, QrCode, Copy, Check,
-  AlertTriangle, Image, Video, Music, FileText, FileArchive, FileCode, File as FileIcon,
-  CheckCircle2, AlertCircle, ArrowDownToLine, Link2Off, Clock,
+  AlertTriangle, CheckCircle2, AlertCircle, ArrowDownToLine, Link2Off, Clock, BarChart3, Pause, Play,
 } from 'lucide-react';
 import { Spinner, Modal } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../components/Toast';
-import { filesApi, LINK_EXPIRY, DEFAULT_EXPIRY } from '../../api/filesApi';
-import { formatBytes, formatDate, fileKind } from '../../lib/format';
+import { filesApi, LINK_EXPIRY, DEFAULT_EXPIRY, DOWNLOAD_LIMITS } from '../../api/filesApi';
+import { formatBytes, formatDate, formatRelative, fileKind } from '../../lib/format';
+import { KIND_ICON, KIND_LABEL, CHANNEL, LINK_STATUS as STATUS } from '../../lib/meta';
 
-const KIND_ICON = {
-  image: Image, video: Video, audio: Music, pdf: FileText,
-  archive: FileArchive, code: FileCode, document: FileText, file: FileIcon,
-};
-const KIND_LABEL = {
-  image: 'Image', video: 'Video', audio: 'Audio', pdf: 'PDF',
-  archive: 'Archive', code: 'Code', document: 'Document', file: 'File',
-};
-
-const MAX_UPLOAD_BYTES = 5 * 1024 ** 3; // S3 single-PUT limit (5 GiB)
 const SORTS = { date: 'Newest first', name: 'Name', size: 'Largest first' };
 
 export default function Files() {
@@ -28,25 +18,32 @@ export default function Files() {
   const toast = useToast();
   const userId = session.userId;
   const idToken = session.tokens.id_token;
+  // Long uploads outlive one token: they read the current one through a ref.
+  const tokenRef = useRef(idToken);
+  tokenRef.current = idToken;
 
   const [files, setFiles] = useState(null);
+  const [usage, setUsage] = useState(null); // { used_bytes, quota_bytes (0 = unlimited) }
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('date');
-  const [uploads, setUploads] = useState([]); // {id, name, size, progress, status: uploading|done|error}
+  // {id, fileId, name, size, progress, resumable, status: uploading|paused|done|error}
+  const [uploads, setUploads] = useState([]);
   const [dragging, setDragging] = useState(false);
   const [shareFor, setShareFor] = useState(null);
   const [linkFor, setLinkFor] = useState(null); // { file, qr: bool }
-  const [revokeFor, setRevokeFor] = useState(null);
+  const [linksFor, setLinksFor] = useState(null);
   const [deleteFor, setDeleteFor] = useState(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const inputRef = useRef(null);
+  const localFiles = useRef(new Map()); // upload id -> { file, controller } (for pause / resume)
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const r = await filesApi.list(userId, idToken);
       setFiles(r.user_files || []);
+      setUsage(r.usage || null);
     } catch (err) { toast.error(err); } finally { setLoading(false); }
   }, [userId, idToken, toast]);
 
@@ -54,30 +51,50 @@ export default function Files() {
 
   const patchUpload = (id, patch) => setUploads((u) => u.map((x) => (x.id === id ? { ...x, ...patch } : x)));
 
-  const uploadOne = async (file) => {
-    const id = Math.random().toString(36).slice(2);
-    setUploads((u) => [...u, { id, name: file.name, size: file.size, progress: 0, status: 'uploading' }]);
+  const runUpload = async (id) => {
+    const entry = localFiles.current.get(id);
+    if (!entry) return;
+    const controller = new AbortController();
+    entry.controller = controller;
+    patchUpload(id, { status: 'uploading' });
     try {
       await filesApi.upload({
-        userId, idToken, file,
+        userId, file: entry.file, signal: controller.signal,
+        getToken: () => tokenRef.current,
+        onStarted: (fileId, resumable) => { patchUpload(id, { fileId, resumable }); load(); },
         onProgress: (p) => patchUpload(id, { progress: p }),
       });
       patchUpload(id, { progress: 100, status: 'done' });
+      localFiles.current.delete(id);
       load();
     } catch (err) {
-      patchUpload(id, { status: 'error' });
-      toast.error(err);
+      if (err.aborted) { patchUpload(id, { status: 'paused' }); return; }
+      patchUpload(id, { status: err.resumable ? 'paused' : 'error' });
+      if (!err.resumable) localFiles.current.delete(id);
+      if (err.status === 413) load();
+      toast.error(err.resumable ? `${entry.file.name}: ${err.message} You can resume the upload.` : err);
     }
   };
 
+  const pauseUpload = (id) => localFiles.current.get(id)?.controller?.abort();
+
   const handleFiles = (fileList) => {
-    [...fileList].forEach((file) => {
-      // S3 accepts at most 5 GB in a single upload; stop early with a clear message.
-      if (file.size > MAX_UPLOAD_BYTES) {
-        toast.error(`"${file.name}" is ${formatBytes(file.size)}. Files can be up to 5 GB.`);
+    const list = [...fileList];
+    // The server has the final say, but say "no room" before uploading anything.
+    const quota = usage?.quota_bytes || 0;
+    let room = quota ? quota - (usage.used_bytes || 0)
+      - uploads.filter((u) => u.status === 'uploading').reduce((n, u) => n + u.size, 0) : Infinity;
+    list.forEach((file) => {
+      if (file.size > room) {
+        toast.error(`Not enough storage for "${file.name}" (${formatBytes(file.size)}). `
+          + `You have ${formatBytes(Math.max(0, room))} free.`);
         return;
       }
-      uploadOne(file);
+      room -= file.size;
+      const id = Math.random().toString(36).slice(2);
+      localFiles.current.set(id, { file });
+      setUploads((u) => [...u, { id, name: file.name, size: file.size, progress: 0, status: 'uploading' }]);
+      runUpload(id);
     });
   };
 
@@ -136,13 +153,16 @@ export default function Files() {
   const openUpload = () => setUploadOpen(true);
 
   // Successful uploads leave the tray on their own a few seconds after the
-  // last one finishes; failed ones stay until dismissed so they aren't missed.
+  // last one finishes; failed and paused ones stay so they aren't missed.
   useEffect(() => {
     const busy = uploads.some((u) => u.status === 'uploading');
     if (busy || !uploads.some((u) => u.status === 'done')) return undefined;
     const t = setTimeout(() => setUploads((u) => u.filter((x) => x.status !== 'done')), 4000);
     return () => clearTimeout(t);
   }, [uploads]);
+
+  // file id -> its upload in this tab (to show live progress in the file list)
+  const liveUploads = useMemo(() => new Map(uploads.filter((u) => u.fileId).map((u) => [u.fileId, u])), [uploads]);
 
   return (
     <div>
@@ -157,7 +177,7 @@ export default function Files() {
             {files
               ? <span className="tabular-nums">{files.length} {files.length === 1 ? 'file' : 'files'} · {formatBytes(totalBytes)} · </span>
               : null}
-            Up to 5 GB per file. You choose how long each link works.
+            You choose how long each link works and how many downloads it allows.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -169,6 +189,8 @@ export default function Files() {
           </button>
         </div>
       </div>
+
+      {usage && <StorageBar usage={usage} />}
 
       {/* Toolbar */}
       <div className="mt-6 flex flex-wrap items-center gap-2">
@@ -208,9 +230,9 @@ export default function Files() {
         {visible.length > 0 && (
           <ul className="divide-y divide-line">
             {visible.map((f) => (
-              <FileRow key={f.file_id} f={f}
+              <FileRow key={f.file_id} f={f} live={liveUploads.get(f.file_id)}
                 onDownload={() => download(f)} onShare={() => setShareFor(f)} onCopy={() => setLinkFor({ file: f, qr: false })}
-                onQr={() => setLinkFor({ file: f, qr: true })} onRevoke={() => setRevokeFor(f)}
+                onQr={() => setLinkFor({ file: f, qr: true })} onLinks={() => setLinksFor(f)}
                 onDelete={() => setDeleteFor(f)} />
             ))}
           </ul>
@@ -223,13 +245,16 @@ export default function Files() {
             <div className="text-center">
               <ArrowDownToLine className="mx-auto h-8 w-8 text-accent" />
               <p className="mt-3 text-base font-semibold">Drop to upload</p>
-              <p className="mt-1 text-sm text-muted">Up to 5 GB per file</p>
+              <p className="mt-1 text-sm text-muted">Drop an unfinished file again to resume it</p>
             </div>
           </div>
         </div>
       )}
 
-      {uploads.length > 0 && <UploadTray uploads={uploads} onClear={() => setUploads((u) => u.filter((x) => x.status === 'uploading'))} />}
+      {uploads.length > 0 && (
+        <UploadTray uploads={uploads} onPause={pauseUpload} onResume={runUpload}
+          onClear={() => setUploads((u) => u.filter((x) => x.status === 'uploading'))} />
+      )}
       {uploadOpen && (
         <UploadModal
           onClose={() => setUploadOpen(false)}
@@ -239,16 +264,49 @@ export default function Files() {
 
       {shareFor && <ShareModal file={shareFor} userId={userId} idToken={idToken} onClose={() => setShareFor(null)} />}
       {linkFor && <LinkModal file={linkFor.file} qr={linkFor.qr} userId={userId} idToken={idToken} onClose={() => setLinkFor(null)} />}
-      {revokeFor && <RevokeModal file={revokeFor} userId={userId} idToken={idToken} onClose={() => setRevokeFor(null)} />}
+      {linksFor && <LinksModal file={linksFor} userId={userId} idToken={idToken} onClose={() => { setLinksFor(null); load(); }} />}
       {deleteFor && <DeleteModal file={deleteFor} onConfirm={confirmDelete} onClose={() => setDeleteFor(null)} />}
     </div>
   );
 }
 
-function FileRow({ f, onDownload, onShare, onCopy, onQr, onRevoke, onDelete }) {
+function StorageBar({ usage }) {
+  const used = usage.used_bytes || 0;
+  const quota = usage.quota_bytes || 0;
+  if (!quota) {
+    return <p className="mt-3 text-xs text-muted tabular-nums">{formatBytes(used)} used · no storage limit</p>;
+  }
+  const pct = Math.min(100, (used / quota) * 100);
+  const tone = pct >= 95 ? 'bg-danger' : pct >= 80 ? 'bg-amber-500' : 'bg-accent';
+  return (
+    <div className="mt-4 max-w-md">
+      <div className="flex items-baseline justify-between text-xs text-muted tabular-nums">
+        <span><span className="font-medium text-fg">{formatBytes(used)}</span> of {formatBytes(quota)} used</span>
+        <span>{formatBytes(Math.max(0, quota - used))} free</span>
+      </div>
+      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-2" role="progressbar"
+        aria-label="Storage used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)}>
+        <div className={`h-full rounded-full ${tone}`} style={{ width: `${Math.max(pct, used ? 1 : 0)}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function PendingStatus({ f, live }) {
+  if (live?.status === 'uploading') {
+    return <><Spinner className="h-3.5 w-3.5" /> Uploading… {live.progress}%</>;
+  }
+  if (live?.status === 'paused' || f.resumable) {
+    return <span title="Upload the same file again to continue where it stopped"><Pause className="mr-1 inline h-3.5 w-3.5" />Paused · add the file again to resume</span>;
+  }
+  return <><Spinner className="h-3.5 w-3.5" /> Uploading…</>;
+}
+
+function FileRow({ f, live, onDownload, onShare, onCopy, onQr, onLinks, onDelete }) {
   const kind = fileKind(f.file_name, f.content_type);
   const Icon = KIND_ICON[kind];
   const pending = f.status && f.status !== 'READY';
+  const downloads = f.download_count ? ` · ${f.download_count} ${f.download_count === 1 ? 'download' : 'downloads'}` : '';
   return (
     <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors hover:bg-surface-2 sm:grid-cols-[minmax(0,1fr)_96px_128px_220px]">
       <div className="flex min-w-0 items-center gap-3">
@@ -258,9 +316,9 @@ function FileRow({ f, onDownload, onShare, onCopy, onQr, onRevoke, onDelete }) {
         <div className="min-w-0">
           <div className="truncate text-sm font-medium" title={f.file_name}>{f.file_name}</div>
           <div className="mt-0.5 text-xs text-muted sm:hidden">
-            {KIND_LABEL[kind]} · {formatBytes(f.size)}{f.uploaded_at ? ` · ${formatDate(f.uploaded_at)}` : ''}
+            {KIND_LABEL[kind]} · {formatBytes(f.size)}{f.uploaded_at ? ` · ${formatDate(f.uploaded_at)}` : ''}{downloads}
           </div>
-          <div className="mt-0.5 hidden text-xs text-subtle sm:block">{KIND_LABEL[kind]}</div>
+          <div className="mt-0.5 hidden text-xs text-subtle sm:block">{KIND_LABEL[kind]}{downloads}</div>
         </div>
       </div>
       <div className="hidden text-right font-mono text-[13px] text-muted sm:block">{formatBytes(f.size)}</div>
@@ -269,7 +327,7 @@ function FileRow({ f, onDownload, onShare, onCopy, onQr, onRevoke, onDelete }) {
       <div className="col-span-2 flex items-center justify-end gap-0.5 sm:col-span-1">
         {pending ? (
           <>
-            <span className="mr-auto flex items-center gap-1.5 text-xs text-muted sm:mr-1"><Spinner className="h-3.5 w-3.5" /> Uploading…</span>
+            <span className="mr-auto flex items-center gap-1.5 text-xs text-muted sm:mr-1"><PendingStatus f={f} live={live} /></span>
             <button onClick={onDelete} className="btn-icon-danger" title="Delete" aria-label={`Delete ${f.file_name}`}>
               <Trash2 className="h-4 w-4" />
             </button>
@@ -280,7 +338,7 @@ function FileRow({ f, onDownload, onShare, onCopy, onQr, onRevoke, onDelete }) {
             <button onClick={onShare} className="btn-icon" title="Share by email" aria-label={`Share ${f.file_name} by email`}><Mail className="h-4 w-4" /></button>
             <button onClick={onCopy} className="btn-icon" title="Copy link" aria-label={`Copy link to ${f.file_name}`}><Link2 className="h-4 w-4" /></button>
             <button onClick={onQr} className="btn-icon" title="QR code" aria-label={`QR code for ${f.file_name}`}><QrCode className="h-4 w-4" /></button>
-            <button onClick={onRevoke} className="btn-icon" title="Turn off links" aria-label={`Turn off links to ${f.file_name}`}><Link2Off className="h-4 w-4" /></button>
+            <button onClick={onLinks} className="btn-icon" title="Links & downloads" aria-label={`Links and downloads for ${f.file_name}`}><BarChart3 className="h-4 w-4" /></button>
             <span className="mx-1 h-4 w-px bg-line" aria-hidden="true" />
             <button onClick={onDelete} className="btn-icon-danger" title="Delete" aria-label={`Delete ${f.file_name}`}><Trash2 className="h-4 w-4" /></button>
           </>
@@ -333,18 +391,20 @@ function UploadModal({ onClose, onChoose, onFiles }) {
         <button type="button" autoFocus className="btn-secondary mt-3" onClick={(e) => { e.stopPropagation(); onChoose(); }}>
           Choose files
         </button>
-        <p className="mt-5 text-xs text-muted">Up to 5 GB per file. You can select several at once.</p>
+        <p className="mt-5 text-xs text-muted">You can select several at once. Large files upload in parts and can be paused and resumed.</p>
       </div>
     </Modal>
   );
 }
 
-function UploadTray({ uploads, onClear }) {
+function UploadTray({ uploads, onClear, onPause, onResume }) {
   const active = uploads.filter((u) => u.status === 'uploading').length;
   const failed = uploads.filter((u) => u.status === 'error').length;
+  const paused = uploads.filter((u) => u.status === 'paused').length;
   const title = active
     ? `Uploading ${active} ${active === 1 ? 'file' : 'files'}`
-    : failed ? `${failed} ${failed === 1 ? 'upload' : 'uploads'} failed` : 'Uploads complete';
+    : paused ? `${paused} ${paused === 1 ? 'upload' : 'uploads'} paused`
+      : failed ? `${failed} ${failed === 1 ? 'upload' : 'uploads'} failed` : 'Uploads complete';
   return (
     <div className="panel fixed bottom-4 right-4 z-40 w-[min(360px,calc(100vw-2rem))] overflow-hidden shadow-lg">
       <div className="flex items-center justify-between border-b border-line bg-surface-2 px-4 py-2.5">
@@ -360,14 +420,26 @@ function UploadTray({ uploads, onClear }) {
               {u.status === 'done' && <CheckCircle2 className="h-4 w-4 shrink-0 text-accent" />}
               {u.status === 'error' && <AlertCircle className="h-4 w-4 shrink-0 text-danger" />}
               {u.status === 'uploading' && <Spinner className="h-4 w-4 shrink-0 text-muted" />}
+              {u.status === 'paused' && <Pause className="h-4 w-4 shrink-0 text-muted" />}
               <span className="min-w-0 flex-1 truncate" title={u.name}>{u.name}</span>
               <span className={`shrink-0 font-mono text-xs ${u.status === 'error' ? 'text-danger' : 'text-muted'}`}>
                 {u.status === 'error' ? 'Failed' : u.status === 'done' ? formatBytes(u.size) : `${u.progress}%`}
               </span>
+              {u.status === 'uploading' && u.resumable && (
+                <button onClick={() => onPause(u.id)} className="btn-icon -my-1 h-7 w-7" title="Pause" aria-label={`Pause ${u.name}`}>
+                  <Pause className="h-3.5 w-3.5" />
+                </button>
+              )}
+              {u.status === 'paused' && (
+                <button onClick={() => onResume(u.id)} className="btn-icon -my-1 h-7 w-7" title="Resume" aria-label={`Resume ${u.name}`}>
+                  <Play className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
-            {u.status === 'uploading' && (
+            {(u.status === 'uploading' || u.status === 'paused') && (
               <div className="mt-2 h-1 overflow-hidden rounded-full bg-surface-2">
-                <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${u.progress}%` }} />
+                <div className={`h-full rounded-full transition-[width] ${u.status === 'paused' ? 'bg-line-strong' : 'bg-accent'}`}
+                  style={{ width: `${u.progress}%` }} />
               </div>
             )}
           </li>
@@ -386,6 +458,7 @@ function ShareModal({ file, userId, idToken, onClose }) {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [expiry, setExpiry] = useState(DEFAULT_EXPIRY);
+  const [limit, setLimit] = useState(null);
 
   const addEmail = (raw) => {
     const v = raw.trim().replace(/,$/, '');
@@ -403,8 +476,8 @@ function ShareModal({ file, userId, idToken, onClose }) {
     if (valid.length > MAX_RECIPIENTS) { toast.error(`You can share with up to ${MAX_RECIPIENTS} people at a time.`); return; }
     setBusy(true);
     try {
-      await filesApi.share(userId, file.file_id, idToken, valid, expiry);
-      toast.success(`Sent to ${valid.length} ${valid.length === 1 ? 'person' : 'people'}. ${expiryPhrase(expiry)}`);
+      await filesApi.share(userId, file.file_id, idToken, valid, { expiresIn: expiry, maxDownloads: limit });
+      toast.success(`Sent to ${valid.length} ${valid.length === 1 ? 'person' : 'people'}. ${expiryPhrase(expiry)}${limitPhrase(limit, valid.length > 1)}`);
       onClose();
     } catch (err) { toast.error(err); } finally { setBusy(false); }
   };
@@ -418,7 +491,7 @@ function ShareModal({ file, userId, idToken, onClose }) {
         </button>
       </>}>
       <p className="truncate text-sm font-medium" title={file.file_name}>{file.file_name}</p>
-      <p className="mt-1 text-sm text-muted">Each recipient gets an email with a download link.</p>
+      <p className="mt-1 text-sm text-muted">Each recipient gets an email with their own download link, so you can see who downloaded it.</p>
 
       <label className="label mt-5" htmlFor="share-emails">Recipients</label>
       <div className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-md border border-line-strong bg-surface px-2 py-1.5 focus-within:border-accent focus-within:ring-3 focus-within:ring-ring">
@@ -444,6 +517,7 @@ function ShareModal({ file, userId, idToken, onClose }) {
       <span className="hint">Press Enter or comma after each address.</span>
 
       <ExpiryPicker id="share-expiry" value={expiry} onChange={setExpiry} />
+      <LimitPicker id="share-limit" value={limit} onChange={setLimit} perPerson />
     </Modal>
   );
 }
@@ -453,6 +527,30 @@ function expiryPhrase(expiry) {
   if (expiry === 'never') return 'The link doesn’t expire.';
   const label = LINK_EXPIRY.find((o) => o.value === expiry)?.label || '';
   return `The link works for ${label}.`;
+}
+
+// " Each link can be used 3 times."
+function limitPhrase(limit, several) {
+  if (!limit) return '';
+  const times = limit === 1 ? 'once' : `${limit} times`;
+  return several ? ` Each link can be used ${times}.` : ` It can be used ${times}.`;
+}
+
+function LimitPicker({ id, value, onChange, perPerson = false }) {
+  return (
+    <div className="mt-5">
+      <label className="label" htmlFor={id}>Download limit</label>
+      <select id={id} className="input h-9" value={value ?? ''}
+        onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}>
+        {DOWNLOAD_LIMITS.map((o) => <option key={o.label} value={o.value ?? ''}>{o.label}</option>)}
+      </select>
+      <span className="hint">
+        {value
+          ? `The link stops working after ${value === 1 ? '1 download' : `${value} downloads`}${perPerson ? ' (counted per recipient)' : ''}. People press a Download button first, so link previews don’t use it up.`
+          : 'The link works any number of times until it expires.'}
+      </span>
+    </div>
+  );
 }
 
 function formatExpiresAt(expiresAt) {
@@ -486,7 +584,8 @@ function ExpiryPicker({ id, value, onChange }) {
 function LinkModal({ file, qr, userId, idToken, onClose }) {
   const toast = useToast();
   const [expiry, setExpiry] = useState(DEFAULT_EXPIRY);
-  const [link, setLink] = useState(null); // { url, expiresAt }
+  const [limit, setLimit] = useState(null);
+  const [link, setLink] = useState(null); // { url, expiresAt, maxDownloads }
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -501,8 +600,9 @@ function LinkModal({ file, qr, userId, idToken, onClose }) {
   const create = async () => {
     setBusy(true);
     try {
-      const r = await filesApi.qrLink(userId, file.file_id, idToken, expiry);
-      setLink({ url: r.short_url, expiresAt: r.expires_at });
+      const r = await filesApi.createLink(userId, file.file_id, idToken,
+        { expiresIn: expiry, maxDownloads: limit, channel: qr ? 'qr' : 'link' });
+      setLink({ url: r.short_url, expiresAt: r.expires_at, maxDownloads: r.max_downloads });
       if (!qr) await copy(r.short_url);
     } catch (err) { toast.error(err); } finally { setBusy(false); }
   };
@@ -543,11 +643,15 @@ function LinkModal({ file, qr, userId, idToken, onClose }) {
       {link ? (
         <p className={`mt-3 flex items-center gap-1.5 text-xs text-muted ${qr ? 'justify-center' : ''}`}>
           <Clock className="h-3.5 w-3.5" /> {formatExpiresAt(link.expiresAt)}
+          {link.maxDownloads ? <><span aria-hidden="true">·</span> {link.maxDownloads === 1 ? '1 download' : `${link.maxDownloads} downloads`}</> : null}
           <span aria-hidden="true">·</span>
           <button className="underline underline-offset-2 hover:text-fg" onClick={() => setLink(null)}>New link</button>
         </p>
       ) : (
-        <ExpiryPicker id="link-expiry" value={expiry} onChange={setExpiry} />
+        <>
+          <ExpiryPicker id="link-expiry" value={expiry} onChange={setExpiry} />
+          <LimitPicker id="link-limit" value={limit} onChange={setLimit} />
+        </>
       )}
 
       <p className={`mt-4 text-xs text-muted ${qr ? 'text-center' : ''}`}>
@@ -557,40 +661,103 @@ function LinkModal({ file, qr, userId, idToken, onClose }) {
   );
 }
 
-function RevokeModal({ file, userId, idToken, onClose }) {
+// Every link shared for a file, with download stats; turn off one or all.
+function LinksModal({ file, userId, idToken, onClose }) {
   const toast = useToast();
-  const [busy, setBusy] = useState(false);
+  const [data, setData] = useState(null); // { links, download_count }
+  const [busy, setBusy] = useState(null); // code being turned off, or 'all'
+  const [confirmAll, setConfirmAll] = useState(false);
 
-  const confirm = async () => {
-    setBusy(true);
+  const refresh = useCallback(async () => {
+    try { setData(await filesApi.links(userId, file.file_id, idToken)); } catch (err) { toast.error(err); }
+  }, [userId, file.file_id, idToken, toast]);
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const turnOff = async (code) => {
+    setBusy(code);
+    try {
+      await filesApi.revokeLink(userId, file.file_id, code, idToken);
+      await refresh();
+    } catch (err) { toast.error(err); } finally { setBusy(null); }
+  };
+
+  const turnOffAll = async () => {
+    setBusy('all');
     try {
       await filesApi.revokeLinks(userId, file.file_id, idToken);
       toast.success(`Links to ${file.file_name} are turned off.`);
-      onClose();
-    } catch (err) { toast.error(err); setBusy(false); }
+      setConfirmAll(false);
+      await refresh();
+    } catch (err) { toast.error(err); } finally { setBusy(null); }
   };
 
+  const links = data?.links || [];
+  const active = links.filter((l) => l.status === 'active').length;
+
   return (
-    <Modal onClose={busy ? () => {} : onClose} width="max-w-sm"
-      footer={<>
-        <button className="btn-secondary" onClick={onClose} disabled={busy} autoFocus>Cancel</button>
-        <button className="btn-danger" onClick={confirm} disabled={busy}>
-          {busy ? <Spinner /> : <><Link2Off className="h-4 w-4" /> Turn off links</>}
-        </button>
-      </>}>
-      <div className="flex items-start gap-3.5">
-        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-danger-soft text-danger">
-          <Link2Off className="h-4 w-4" />
+    <Modal onClose={busy ? () => {} : onClose} title="Links & downloads" icon={BarChart3} width="max-w-2xl"
+      footer={confirmAll ? (
+        <>
+          <span className="mr-auto self-center text-sm text-danger">Turn off all {active} active {active === 1 ? 'link' : 'links'}?</span>
+          <button className="btn-secondary" onClick={() => setConfirmAll(false)} disabled={busy === 'all'}>Cancel</button>
+          <button className="btn-danger" onClick={turnOffAll} disabled={busy === 'all'}>
+            {busy === 'all' ? <Spinner /> : <><Link2Off className="h-4 w-4" /> Turn off all</>}
+          </button>
+        </>
+      ) : (
+        <>
+          {active > 0 && (
+            <button className="btn-ghost mr-auto text-danger hover:text-danger" onClick={() => setConfirmAll(true)}>
+              <Link2Off className="h-4 w-4" /> Turn off all links
+            </button>
+          )}
+          <button className="btn-secondary" onClick={onClose}>Close</button>
+        </>
+      )}>
+      <p className="truncate text-sm font-medium" title={file.file_name}>{file.file_name}</p>
+      <p className="mt-1 text-sm text-muted tabular-nums">
+        {data ? <>{data.download_count} {data.download_count === 1 ? 'download' : 'downloads'} through shared links · {active} active {active === 1 ? 'link' : 'links'}</> : 'Loading…'}
+      </p>
+
+      {!data && <div className="grid place-items-center py-10"><Spinner /></div>}
+      {data && links.length === 0 && (
+        <div className="mt-4 rounded-md border border-dashed border-line px-4 py-8 text-center text-sm text-muted">
+          No links yet. Share the file by email, copy a link, or make a QR code.
         </div>
-        <div className="min-w-0">
-          <h2 className="text-[15px] font-semibold">Turn off all links?</h2>
-          <p className="mt-1 text-sm text-muted">
-            Every link you've shared for <span className="break-all font-medium text-fg">{file.file_name}</span> (by
-            email, copied, or as a QR code) stops working now. The file stays in your account, and you can share new
-            links afterwards.
-          </p>
-        </div>
-      </div>
+      )}
+      {links.length > 0 && (
+        <ul className="mt-4 max-h-[50vh] divide-y divide-line overflow-y-auto rounded-md border border-line">
+          {links.map((l) => {
+            const ch = CHANNEL[l.channel] || CHANNEL.link;
+            const st = STATUS[l.status] || STATUS.file_missing;
+            return (
+              <li key={l.code} className="flex items-center gap-3 px-3 py-2.5">
+                <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-line bg-surface-2 text-muted" title={ch.label}>
+                  <ch.icon className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium">{l.recipient || ch.label}</span>
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium ${st.className}`}>{st.label}</span>
+                  </div>
+                  <div className="mt-0.5 text-xs text-muted tabular-nums">
+                    {l.max_downloads ? `${l.downloads} of ${l.max_downloads} downloads` : `${l.downloads} ${l.downloads === 1 ? 'download' : 'downloads'}`}
+                    {l.last_downloaded_at ? ` · last ${formatRelative(l.last_downloaded_at * 1000)}` : ''}
+                    {` · made ${formatRelative(l.created_at)}`}
+                    {l.status === 'active' ? ` · ${l.expires_at ? formatExpiresAt(l.expires_at).toLowerCase() : 'never expires'}` : ''}
+                  </div>
+                </div>
+                {l.status === 'active' && (
+                  <button className="btn-secondary h-8 shrink-0 px-2.5 text-xs" onClick={() => turnOff(l.code)} disabled={Boolean(busy)}
+                    aria-label={`Turn off link ${l.recipient ? `for ${l.recipient}` : ''}`}>
+                    {busy === l.code ? <Spinner className="h-3.5 w-3.5" /> : 'Turn off'}
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </Modal>
   );
 }

@@ -20,17 +20,30 @@ resource "aws_iam_role_policy_attachment" "basic" {
 locals {
   base_statements = [
     {
-      Effect   = "Allow"
-      Action   = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"]
+      Effect = "Allow"
+      Action = [
+        "s3:PutObject", "s3:GetObject", "s3:DeleteObject",
+        "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts" # multipart uploads
+      ]
       Resource = "${aws_s3_bucket.files.arn}/*"
     },
     {
       Effect = "Allow"
       Action = [
         "dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem",
-        "dynamodb:UpdateItem", "dynamodb:Query", "dynamodb:Scan"
+        "dynamodb:UpdateItem", "dynamodb:Query", "dynamodb:BatchWriteItem"
       ]
-      Resource = aws_dynamodb_table.files.arn
+      # the table and its indexes (user-files, file-links); no Scan needed any more
+      Resource = [aws_dynamodb_table.files.arn, "${aws_dynamodb_table.files.arn}/index/*"]
+    },
+    {
+      # the cleanup Lambda reads deletions from the table's stream (cleanup.tf)
+      Effect = "Allow"
+      Action = [
+        "dynamodb:DescribeStream", "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator", "dynamodb:ListStreams"
+      ]
+      Resource = "${aws_dynamodb_table.files.arn}/stream/*"
     },
     {
       Effect   = "Allow"

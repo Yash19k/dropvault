@@ -134,3 +134,39 @@ variable "api_throttle_burst" {
   type        = number
   default     = 100
 }
+
+# --- Storage quota ---
+variable "user_quota_bytes" {
+  description = "Storage each user may use, in bytes (finished uploads only). 0 = unlimited. Default 10 GiB."
+  type        = number
+  default     = 10737418240
+  validation {
+    condition     = var.user_quota_bytes >= 0
+    error_message = "user_quota_bytes must be 0 (unlimited) or more."
+  }
+}
+
+# --- Authorizer ---
+variable "authorizer_cache_seconds" {
+  description = "How long API Gateway remembers that a token is valid (0-3600). Higher = fewer authorizer calls; a signed-out token keeps working at most this long."
+  type        = number
+  default     = 300
+}
+
+# --- Admin panel ---
+variable "admin_emails" {
+  description = "Emails of the owner admins: they can open the admin panel (/admin) and can't be demoted, suspended or deleted from it. They can make other users admins there."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for e in var.admin_emails : e == lower(trimspace(e)) && can(regex("^[^@ ]+@[^@ ]+$", e))])
+    error_message = "admin_emails must be lowercase email addresses without spaces."
+  }
+}
+
+# --- Alerts ---
+variable "alert_email" {
+  description = "Email address for CloudWatch alarm notifications (Lambda errors, API 5xx). Empty = alarms only go to the SNS topic."
+  type        = string
+  default     = ""
+}

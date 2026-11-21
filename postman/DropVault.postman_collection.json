@@ -355,7 +355,7 @@
             "description": "Email a 1-hour download link to each address via SES.\n201 -> { file_id, file_name, status: 'SHARED' }.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"share_with\": [\n    \"friend@example.com\"\n  ]\n}",
+              "raw": "{\n  \"share_with\": [\n    \"friend@example.com\"\n  ],\n  \"max_downloads\": 1\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -374,6 +374,11 @@
                 "key": "Authorization",
                 "value": "Bearer {{IdToken}}",
                 "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
               }
             ],
             "url": {
@@ -390,7 +395,179 @@
                 "qr"
               ]
             },
-            "description": "Create a short public link for QR codes.\n201 -> { short_url, expires_at }.\nOpening short_url (GET /v1/d/{code}, no auth) redirects to a fresh download until it expires (1 hour) or the file is deleted."
+            "description": "Create a short public link (copy-link or QR code).\nBody (all optional): expires_in (900|3600|21600|86400|604800|\"never\"), max_downloads (1-1000 or null), channel (\"link\"|\"qr\").\n201 -> { short_url, expires_at, max_downloads }.\nOpening short_url (GET /v1/d/{code}, no auth) redirects to a fresh download; links with a download limit show a Download button page first.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"expires_in\": 86400,\n  \"max_downloads\": 3,\n  \"channel\": \"qr\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Multipart part URLs",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{IdToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}/parts",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{USER_ID}}",
+                "files",
+                "{{FILE_ID}}",
+                "parts"
+              ]
+            },
+            "description": "For uploads that returned upload_type \"multipart\": presigned URLs for up to 100 parts.\ninclude_uploaded: true also returns the part numbers S3 already has (to resume).\nPUT each part's bytes to its URL, then call Complete upload.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"part_numbers\": [\n    1,\n    2,\n    3\n  ],\n  \"include_uploaded\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List links & stats",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{IdToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}/links",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{USER_ID}}",
+                "files",
+                "{{FILE_ID}}",
+                "links"
+              ]
+            },
+            "description": "Every link made for the file with its download stats and status (active, expired, revoked, limit_reached).\nSaves the newest link's code as LINK_CODE."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const links = pm.response.json().links || [];",
+                  "if (links.length) pm.collectionVariables.set('LINK_CODE', links[0].code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Turn off one link",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{IdToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}/links/{{LINK_CODE}}",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{USER_ID}}",
+                "files",
+                "{{FILE_ID}}",
+                "links",
+                "{{LINK_CODE}}"
+              ]
+            },
+            "description": "Turn off a single link (run List links & stats first)."
+          },
+          "response": []
+        },
+        {
+          "name": "Turn off all links",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{IdToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{API_BASE_URL}}/v1/users/{{USER_ID}}/files/{{FILE_ID}}/qr",
+              "host": [
+                "{{API_BASE_URL}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{USER_ID}}",
+                "files",
+                "{{FILE_ID}}",
+                "qr"
+              ]
+            },
+            "description": "Turn off every link made so far for the file (email, copied and QR)."
           },
           "response": []
         },
@@ -450,6 +627,10 @@
       "key": "FILE_ID",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "LINK_CODE",
+      "value": ""
     }
   ]
 }

@@ -27,9 +27,9 @@
     "size": {
       "$id": "#/properties/size",
       "type": "integer",
-      "title": "The size of the file in bytes (S3 single-PUT limit is 5 GiB)",
+      "title": "The size of the file in bytes. Files over the multipart threshold are uploaded in parts (S3 allows objects up to 5 TiB).",
       "minimum": 0,
-      "maximum": 5368709120,
+      "maximum": 5497558138880,
       "examples": [1048576]
     }
   },

@@ -33,6 +33,17 @@ allowed_origins = ["http://localhost:3001"]
 api_domain_name = "" # e.g. "files.example.com"; empty = default execute-api URL
 route53_zone_id = "" # required when api_domain_name is set
 
+# --- Storage each user may use, in bytes. 0 = unlimited. (10 GiB = 10737418240)
+user_quota_bytes = 10737418240
+
+# --- Admin panel (/admin): accounts with these emails are owner admins. Sign up
+#     with one of them, then open the admin panel; you can make others admins there.
+admin_emails = [] # e.g. ["you@example.com"] (lowercase)
+
+# --- Alerts: CloudWatch alarm emails (Lambda errors, API 5xx). AWS sends a
+#     confirmation link to this address first. Empty = no email.
+alert_email = ""
+
 # --- Encryption: 's3' (free), 'shared' (one KMS key), or 'per_user' (~$1/user/mo) ---
 kms_mode = "s3"
 

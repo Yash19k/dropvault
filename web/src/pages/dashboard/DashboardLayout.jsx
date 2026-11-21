@@ -1,11 +1,21 @@
 import { useState } from 'react';
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { FolderClosed, LogOut, Menu, X } from 'lucide-react';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import {
+  FolderClosed, LogOut, Menu, X, LayoutDashboard, Users, Files, Link2, History, Server,
+} from 'lucide-react';
 import { Logo } from '../../components/ui';
 import { ThemeToggle } from '../../theme';
 import { useAuth } from '../../context/AuthContext';
 
 const nav = [{ to: '/app', end: true, icon: FolderClosed, label: 'All files' }];
+const adminNav = [
+  { to: '/admin', end: true, icon: LayoutDashboard, label: 'Overview' },
+  { to: '/admin/users', icon: Users, label: 'Users' },
+  { to: '/admin/files', icon: Files, label: 'Files' },
+  { to: '/admin/links', icon: Link2, label: 'Links' },
+  { to: '/admin/activity', icon: History, label: 'Activity' },
+  { to: '/admin/system', icon: Server, label: 'System' },
+];
 
 function initials(name, email) {
   const src = (name || email || '?').trim();
@@ -14,9 +24,19 @@ function initials(name, email) {
 }
 
 export default function DashboardLayout() {
-  const { session, signOut } = useAuth();
+  const { session, signOut, isAdmin } = useAuth();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
+  const inAdmin = pathname.startsWith('/admin');
+
+  const navItem = (n) => (
+    <NavLink key={n.to} to={n.to} end={n.end} onClick={() => setOpen(false)}
+      className={({ isActive }) => `flex h-9 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors ${
+        isActive ? 'bg-surface-2 font-medium text-fg' : 'text-muted hover:bg-surface-2 hover:text-fg'}`}>
+      <n.icon className="h-4 w-4" /> {n.label}
+    </NavLink>
+  );
 
   const handleSignOut = async () => {
     await signOut();
@@ -29,14 +49,14 @@ export default function DashboardLayout() {
         <Link to="/" aria-label="DropVault home"><Logo /></Link>
       </div>
 
-      <nav className="flex-1 space-y-0.5 p-3" aria-label="Main">
-        {nav.map((n) => (
-          <NavLink key={n.to} to={n.to} end={n.end} onClick={() => setOpen(false)}
-            className={({ isActive }) => `flex h-9 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors ${
-              isActive ? 'bg-surface-2 font-medium text-fg' : 'text-muted hover:bg-surface-2 hover:text-fg'}`}>
-            <n.icon className="h-4 w-4" /> {n.label}
-          </NavLink>
-        ))}
+      <nav className="flex-1 overflow-y-auto p-3" aria-label="Main">
+        <div className="space-y-0.5">{nav.map(navItem)}</div>
+        {isAdmin && (
+          <div className="mt-5">
+            <div className="px-2.5 pb-1.5 text-xs font-medium text-subtle" id="admin-nav">Admin</div>
+            <div className="space-y-0.5" role="group" aria-labelledby="admin-nav">{adminNav.map(navItem)}</div>
+          </div>
+        )}
       </nav>
 
       <div className="space-y-3 border-t border-line p-3">
@@ -82,7 +102,7 @@ export default function DashboardLayout() {
       )}
 
       <main className="min-w-0 px-4 py-6 sm:px-8 lg:px-10 lg:py-9">
-        <div className="mx-auto max-w-5xl"><Outlet /></div>
+        <div className={`mx-auto ${inAdmin ? 'max-w-6xl' : 'max-w-5xl'}`}><Outlet /></div>
       </main>
     </div>
   );

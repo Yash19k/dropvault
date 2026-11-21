@@ -9,9 +9,9 @@ import { useAuth } from '../context/AuthContext';
 import { APP_NAME, REPO_URL } from '../brand';
 
 const steps = [
-  { n: '01', title: 'Upload', text: 'Drag files in or pick them from your computer. They go straight to private storage, up to 5 GB each.' },
+  { n: '01', title: 'Upload', text: 'Drag files in or pick them from your computer. They go straight to private storage. Big files upload in parts you can pause and resume.' },
   { n: '02', title: 'Share', text: 'Email a link, copy it, or show a QR code that someone can scan from across the table.' },
-  { n: '03', title: 'It expires', text: 'Pick how long a link works, from 15 minutes to never. Turn links off any time.' },
+  { n: '03', title: 'It expires', text: 'Pick how long a link works and how many downloads it allows. See who downloaded it, and turn links off any time.' },
 ];
 
 const features = [
@@ -60,7 +60,7 @@ export default function Landing() {
               Share files with links that expire.
             </h1>
             <p className="mt-5 max-w-lg text-[17px] leading-relaxed text-muted">
-              Upload files up to 5 GB, send them by email or QR code, and choose how long every link keeps working.
+              Upload big files, send them by email or QR code, and choose how long every link works and how many downloads it allows.
               Nothing stays out there longer than it needs to.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -74,7 +74,7 @@ export default function Landing() {
               )}
             </div>
             <dl className="mt-10 grid max-w-md grid-cols-3 gap-6 border-t border-line pt-6">
-              {[['5 GB', 'per file'], ['15m–never', 'link lifetime'], ['AES-256', 'encryption']].map(([v, k]) => (
+              {[['Resumable', 'big uploads'], ['15m–never', 'link lifetime'], ['AES-256', 'encryption']].map(([v, k]) => (
                 <div key={k}>
                   <dt className="sr-only">{k}</dt>
                   <dd className="font-mono text-lg font-medium">{v}</dd>

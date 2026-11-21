@@ -1,0 +1,7 @@
+# Tools for running the tests and linter locally and in CI
+# (the Lambdas themselves only need what is in the Lambda runtime + layers).
+boto3
+moto[s3,dynamodb,ses,kms]>=5
+jsonschema
+pytest
+ruff

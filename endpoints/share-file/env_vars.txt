@@ -1,7 +1,0 @@
-AUTH_ENDPOINT=https://auth.example.com
-FILE_SHARING_TABLE=enclave-files-dev
-REGION=eu-west-1
-USER_FILES_BUCKET=enclave-file-sharing-dev
-SENDER_EMAIL=no-reply@example.com
-SENDER_SES_ARN=arn:aws:ses:eu-west-1:000000000000:identity/example.com
-APP_NAME=DropVault

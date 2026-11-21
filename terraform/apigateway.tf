@@ -4,7 +4,7 @@ resource "aws_api_gateway_rest_api" "api" {
   endpoint_configuration { types = ["REGIONAL"] }
 }
 
-# --- Resource tree: /v1/users/{user_id}/files/{file_id}/{complete,download,share}
+# --- Resource tree: /v1/users/{user_id}/files/{file_id}/{complete,download,share,parts}
 resource "aws_api_gateway_resource" "v1" {
   rest_api_id = aws_api_gateway_rest_api.api.id
   parent_id   = aws_api_gateway_rest_api.api.root_resource_id
@@ -45,8 +45,14 @@ resource "aws_api_gateway_resource" "share" {
   parent_id   = aws_api_gateway_resource.file_id.id
   path_part   = "share"
 }
+resource "aws_api_gateway_resource" "parts" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_resource.file_id.id
+  path_part   = "parts"
+}
 
-# --- Routes (method + integration + lambda permission) ---
+# --- Routes (method + integration + lambda permission). All of them run the
+#     Lambda authorizer first (authorizer.tf). ---
 module "route_list" {
   source               = "./modules/api-lambda-route"
   rest_api_id          = aws_api_gateway_rest_api.api.id
@@ -55,6 +61,7 @@ module "route_list" {
   lambda_invoke_arn    = aws_lambda_function.fn["list"].invoke_arn
   lambda_function_name = aws_lambda_function.fn["list"].function_name
   execution_arn        = aws_api_gateway_rest_api.api.execution_arn
+  authorizer_id        = aws_api_gateway_authorizer.token.id
 }
 module "route_create" {
   source               = "./modules/api-lambda-route"
@@ -64,6 +71,18 @@ module "route_create" {
   lambda_invoke_arn    = aws_lambda_function.fn["create-upload"].invoke_arn
   lambda_function_name = aws_lambda_function.fn["create-upload"].function_name
   execution_arn        = aws_api_gateway_rest_api.api.execution_arn
+  authorizer_id        = aws_api_gateway_authorizer.token.id
+}
+# Presigned URLs for the parts of a multipart upload (same Lambda as create).
+module "route_parts" {
+  source               = "./modules/api-lambda-route"
+  rest_api_id          = aws_api_gateway_rest_api.api.id
+  resource_id          = aws_api_gateway_resource.parts.id
+  http_method          = "POST"
+  lambda_invoke_arn    = aws_lambda_function.fn["create-upload"].invoke_arn
+  lambda_function_name = aws_lambda_function.fn["create-upload"].function_name
+  execution_arn        = aws_api_gateway_rest_api.api.execution_arn
+  authorizer_id        = aws_api_gateway_authorizer.token.id
 }
 module "route_delete" {
   source               = "./modules/api-lambda-route"
@@ -73,6 +92,7 @@ module "route_delete" {
   lambda_invoke_arn    = aws_lambda_function.fn["delete"].invoke_arn
   lambda_function_name = aws_lambda_function.fn["delete"].function_name
   execution_arn        = aws_api_gateway_rest_api.api.execution_arn
+  authorizer_id        = aws_api_gateway_authorizer.token.id
 }
 module "route_complete" {
   source               = "./modules/api-lambda-route"
@@ -82,6 +102,7 @@ module "route_complete" {
   lambda_invoke_arn    = aws_lambda_function.fn["complete"].invoke_arn
   lambda_function_name = aws_lambda_function.fn["complete"].function_name
   execution_arn        = aws_api_gateway_rest_api.api.execution_arn
+  authorizer_id        = aws_api_gateway_authorizer.token.id
 }
 module "route_download" {
   source               = "./modules/api-lambda-route"
@@ -91,6 +112,7 @@ module "route_download" {
   lambda_invoke_arn    = aws_lambda_function.fn["download"].invoke_arn
   lambda_function_name = aws_lambda_function.fn["download"].function_name
   execution_arn        = aws_api_gateway_rest_api.api.execution_arn
+  authorizer_id        = aws_api_gateway_authorizer.token.id
 }
 module "route_share" {
   source               = "./modules/api-lambda-route"
@@ -100,6 +122,7 @@ module "route_share" {
   lambda_invoke_arn    = aws_lambda_function.fn["share"].invoke_arn
   lambda_function_name = aws_lambda_function.fn["share"].function_name
   execution_arn        = aws_api_gateway_rest_api.api.execution_arn
+  authorizer_id        = aws_api_gateway_authorizer.token.id
 }
 
 # --- CORS preflight on every browser-facing resource ---
@@ -128,6 +151,11 @@ module "cors_share" {
   rest_api_id = aws_api_gateway_rest_api.api.id
   resource_id = aws_api_gateway_resource.share.id
 }
+module "cors_parts" {
+  source      = "./modules/cors-options"
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.parts.id
+}
 
 # --- Deployment + stage ---
 resource "aws_api_gateway_deployment" "this" {
@@ -141,6 +169,8 @@ resource "aws_api_gateway_deployment" "this" {
         filesha1("${path.module}/apigateway.tf"),
         filesha1("${path.module}/auth.tf"),
         filesha1("${path.module}/qr.tf"),
+        filesha1("${path.module}/authorizer.tf"),
+        filesha1("${path.module}/admin.tf"),
         filesha1("${path.module}/modules/api-lambda-route/main.tf"),
         filesha1("${path.module}/modules/cors-options/main.tf"),
       ],
@@ -148,18 +178,23 @@ resource "aws_api_gateway_deployment" "this" {
         module.route_list.integration_id, module.route_create.integration_id,
         module.route_delete.integration_id, module.route_complete.integration_id,
         module.route_download.integration_id, module.route_share.integration_id,
+        module.route_parts.integration_id,
         module.cors_files.integration_id, module.cors_file_id.integration_id,
         module.cors_complete.integration_id, module.cors_download.integration_id,
-        module.cors_share.integration_id,
+        module.cors_share.integration_id, module.cors_parts.integration_id,
       ],
       [for r in module.route_auth : r.integration_id],
       [for c in module.cors_auth : c.integration_id],
       [module.route_qr_create.integration_id, module.route_qr_follow.integration_id,
-        module.route_qr_revoke.integration_id,
-      module.cors_qr.integration_id],
+        module.route_qr_revoke.integration_id, module.route_qr_press.integration_id,
+        module.route_links_list.integration_id, module.route_link_revoke.integration_id,
+      module.cors_qr.integration_id, module.cors_links.integration_id, module.cors_link_code.integration_id],
+      [module.route_admin.integration_id, module.cors_admin.integration_id],
+      [for r in aws_api_gateway_gateway_response.cors : r.id],
     )))
   }
   lifecycle { create_before_destroy = true }
+  depends_on = [aws_api_gateway_gateway_response.cors]
 }
 
 resource "aws_api_gateway_stage" "this" {

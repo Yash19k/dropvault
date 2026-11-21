@@ -31,7 +31,21 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "files" {
   }
 }
 
+# Parts of a multipart upload that is never completed are invisible but still
+# stored (and billed). Throw them away after a day. (The cleanup Lambda usually
+# does this sooner, when the upload's record expires: see cleanup.tf.)
+resource "aws_s3_bucket_lifecycle_configuration" "files" {
+  bucket = aws_s3_bucket.files.id
+  rule {
+    id     = "abort-incomplete-multipart-uploads"
+    status = "Enabled"
+    filter {}
+    abort_incomplete_multipart_upload { days_after_initiation = 1 }
+  }
+}
+
 # Lets the browser PUT (upload) and GET (download via presigned URL) directly.
+# ETag is exposed for multipart uploads.
 resource "aws_s3_bucket_cors_configuration" "files" {
   bucket = aws_s3_bucket.files.id
   cors_rule {

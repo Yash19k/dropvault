@@ -25,8 +25,11 @@ resource "null_resource" "kms_cleanup" {
     region  = var.aws_region
     profile = var.aws_profile
     prefix  = local.prefix
-    script  = abspath("${path.module}/cleanup_kms.sh")
-    bash    = var.bash_bin
+    # Relative on purpose: an absolute path would change whenever the project
+    # folder moves, which replaces this resource and runs the cleanup (deleting
+    # every per-user key). Terraform runs from this folder (deploy.sh, Makefile).
+    script = "${path.module}/cleanup_kms.sh"
+    bash   = var.bash_bin
   }
 
   provisioner "local-exec" {

@@ -20,14 +20,37 @@
         "pattern": "^[^@\\s,;<>\"]+@[^@\\s,;<>\"]+\\.[^@\\s,;<>\"]+$"
       },
       "examples": [
-        ["42@42.com"]
+        [
+          "42@42.com"
+        ]
       ]
     },
     "expires_in": {
       "$id": "#/properties/expires_in",
       "title": "How long the link works: seconds (900, 3600, 21600, 86400, 604800) or \"never\"",
-      "type": ["integer", "string"],
-      "examples": [3600, "never"]
+      "type": [
+        "integer",
+        "string"
+      ],
+      "examples": [
+        3600,
+        "never"
+      ]
+    },
+    "max_downloads": {
+      "$id": "#/properties/max_downloads",
+      "title": "Optional: how many times each recipient's link can be used (1-1000). null = unlimited",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 1000,
+      "examples": [
+        1,
+        5,
+        null
+      ]
     }
   },
   "additionalProperties": false

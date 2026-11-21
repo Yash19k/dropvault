@@ -2,23 +2,28 @@
 '''Simple auth service for DropVault: email + password sign-up and sign-in.
 
 Routes (API Gateway REST, Lambda proxy):
-  POST /v1/users          {full_name, email, password} -> tokens + user_id (signed in)
-  POST /v1/login          {email, password}            -> tokens
-  POST /v1/refresh-token  {refresh_token}              -> new tokens
+  POST /v1/users          {full_name, email, password} -> tokens + user_id + role (signed in)
+  POST /v1/login          {email, password}            -> tokens + role (403 if suspended)
+  POST /v1/refresh-token  {refresh_token}              -> new tokens + role
   POST /v1/logout         Authorization: Bearer <access token> (or {access_token})
-                                                        -> 200, revokes every refresh token
+                                                        -> 200, ends every session
   GET  /v1/userinfo       Authorization: Bearer <id or access token>
                                                         -> {user_id, name, email}
 
-The file Lambdas validate callers by calling /v1/userinfo, exactly as they would
-against any other auth microservice. Users live in DynamoDB (key: email);
-passwords are PBKDF2-SHA256 hashed; tokens are HMAC-SHA256 signed with
-TOKEN_SECRET and carry their own expiry, so no token storage is needed.
+/v1/userinfo is what lets any other service (or an external setup without the
+API Gateway authorizer) validate a caller. Users live in DynamoDB (key: email);
+passwords are PBKDF2-SHA256 hashed; tokens (see tokens.py in the shared
+layer) are HMAC-SHA256 signed and carry their own expiry. The API Gateway
+authorizer checks the same tokens without calling this service.
+
+Every token carries the account's token_version as `ver`. Logging out (and
+an admin suspending the account, resetting its password or signing it out)
+bumps the version, which ends every session: refresh tokens stop working
+here, and the authorizer turns away the old access tokens. `role` ("admin" or
+"user") tells the web app whether to show the admin panel; the admin API
+checks it again on every request (accounts.py in the shared layer).
 '''
 
-import base64
-import hashlib
-import hmac
 import json
 import os
 import re
@@ -28,11 +33,12 @@ import uuid
 
 import boto3
 
+import accounts
+import tokens
+
 TABLE = boto3.resource('dynamodb').Table(os.environ['USERS_TABLE'])
-SECRET = os.environ['TOKEN_SECRET'].encode()
 ACCESS_TTL = 3600            # 1 hour
 REFRESH_TTL = 30 * 24 * 3600  # 30 days
-PBKDF2_ROUNDS = 200000
 MAX_EMAIL = 254
 MAX_NAME = 100
 MAX_PASSWORD = 256
@@ -51,18 +57,10 @@ def respond(status, body):
             'body': json.dumps(body), 'isBase64Encoded': False}
 
 
-# --- passwords ---------------------------------------------------------------
-def hash_password(password, salt=None):
-    salt = salt or secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(),
-                                 PBKDF2_ROUNDS).hex()
-    return '{0}${1}'.format(salt, digest)
-
-
-def check_password(password, stored):
-    salt = stored.split('$', 1)[0]
-    return hmac.compare_digest(hash_password(password, salt), stored)
-
+# --- passwords (PBKDF2-SHA256, shared with the admin panel's password reset) --
+hash_password = accounts.hash_password
+check_password = accounts.check_password
+SUSPENDED = 'This account has been suspended. Contact the administrator if you think this is a mistake.'
 
 # Hashed when the email is unknown, so a failed login takes the same time
 # whether or not the account exists (no account enumeration by timing).
@@ -75,51 +73,35 @@ def text(body, field):
     return value if isinstance(value, str) else ''
 
 
-# --- tokens ------------------------------------------------------------------
-def _b64(data):
-    return base64.urlsafe_b64encode(data).rstrip(b'=').decode()
-
-
-def _unb64(text):
-    return base64.urlsafe_b64decode(text + '=' * (-len(text) % 4))
-
-
-def sign(claims):
-    payload = _b64(json.dumps(claims, separators=(',', ':')).encode())
-    sig = _b64(hmac.new(SECRET, payload.encode(), hashlib.sha256).digest())
-    return payload + '.' + sig
-
-
-def verify(token, allowed_types):
-    try:
-        payload, sig = token.split('.', 1)
-        expected = _b64(hmac.new(SECRET, payload.encode(), hashlib.sha256).digest())
-        if not hmac.compare_digest(sig, expected):
-            return None
-        claims = json.loads(_unb64(payload))
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(claims, dict) or claims.get('typ') not in allowed_types:
-        return None
-    exp = claims.get('exp')
-    if not isinstance(exp, (int, float)) or exp < time.time():
-        return None
-    return claims
+# --- tokens (signing lives in the shared layer: common/python/tokens.py) -----
+sign = tokens.sign
+verify = tokens.verify
 
 
 def issue_tokens(user):
     now = int(time.time())
-    base = {'sub': user['user_id'], 'email': user['email'], 'name': user['name'], 'iat': now}
-    # Refresh tokens carry the user's token version; logout bumps it, which
-    # revokes every refresh token issued before (access tokens expire in 1h).
+    # Every token carries the user's token version; bumping it (logout,
+    # suspend, password reset) ends every session issued before.
+    base = {'sub': user['user_id'], 'email': user['email'], 'name': user['name'], 'iat': now,
+            'ver': int(user.get('token_version', 0))}
     return {
         'id_token': sign(dict(base, typ='id', exp=now + ACCESS_TTL)),
         'access_token': sign(dict(base, typ='access', exp=now + ACCESS_TTL)),
-        'refresh_token': sign(dict(base, typ='refresh', exp=now + REFRESH_TTL,
-                                   ver=int(user.get('token_version', 0)))),
+        'refresh_token': sign(dict(base, typ='refresh', exp=now + REFRESH_TTL)),
         'token_type': 'Bearer',
         'expires_in': ACCESS_TTL,
+        'role': accounts.role(user),
     }
+
+
+def record_login(user):
+    '''Last sign-in time and count, shown in the admin panel (best effort).'''
+    try:
+        TABLE.update_item(Key={'email': user['email']},
+                          UpdateExpression='SET last_login_at = :now ADD login_count :one',
+                          ExpressionAttributeValues={':now': int(time.time()), ':one': 1})
+    except Exception as error:  # pylint: disable=broad-except
+        print('could not record login: {0}'.format(error))
 
 
 # --- routes ------------------------------------------------------------------
@@ -133,8 +115,10 @@ def sign_up(body):
         return respond(400, {'message': 'Full name must be at most {0} characters'.format(MAX_NAME)})
     if len(password) < 8 or len(password) > MAX_PASSWORD:
         return respond(400, {'message': 'Password must be 8 to {0} characters'.format(MAX_PASSWORD)})
+    now = int(time.time())
     user = {'email': email, 'user_id': str(uuid.uuid4()), 'name': name,
-            'password': hash_password(password), 'created_at': int(time.time())}
+            'password': hash_password(password), 'created_at': now,
+            'last_login_at': now, 'login_count': 1}   # signing up signs you in
     try:
         TABLE.put_item(Item=user, ConditionExpression='attribute_not_exists(email)')
     except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
@@ -153,6 +137,9 @@ def login(body):
         return respond(401, {'message': 'Incorrect email or password'})
     if not check_password(password, user['password']):
         return respond(401, {'message': 'Incorrect email or password'})
+    if accounts.is_suspended(user):
+        return respond(403, {'message': SUSPENDED})
+    record_login(user)
     return respond(200, issue_tokens(user))
 
 
@@ -161,20 +148,19 @@ def refresh(body):
     if not claims:
         return respond(401, {'message': 'Invalid refresh token'})
     user = TABLE.get_item(Key={'email': claims['email']}).get('Item')
-    if (not user or user.get('user_id') != claims.get('sub')
-            or int(claims.get('ver', 0)) != int(user.get('token_version', 0))):
+    if user and user.get('user_id') == claims.get('sub') and accounts.is_suspended(user):
+        return respond(403, {'message': SUSPENDED})
+    if not accounts.session_valid(user, claims):
         return respond(401, {'message': 'Invalid refresh token'})
     return respond(200, issue_tokens(user))
 
 
 def bearer(headers):
-    auth = next((v for k, v in headers.items() if k.lower() == 'authorization'), '') or ''
-    return auth[7:].strip() if auth.lower().startswith('bearer ') else auth.strip()
+    return tokens.strip_bearer(next((v for k, v in headers.items() if k.lower() == 'authorization'), ''))
 
 
 def logout(headers, body):
-    '''Revoke all of the caller's refresh tokens (signs out every device once
-       their current 1-hour access token runs out).'''
+    '''End all of the caller's sessions, on every device.'''
     claims = verify(bearer(headers) or text(body, 'access_token'), ('id', 'access'))
     if claims:
         try:

@@ -24,3 +24,8 @@ terraform/build/
 
 # local offline stack
 local/.data/
+
+# test virtualenv
+.venv/
+.pytest_cache/
+.ruff_cache/

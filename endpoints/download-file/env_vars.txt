@@ -1,4 +1,0 @@
-AUTH_ENDPOINT=https://auth.example.com
-FILE_SHARING_TABLE=enclave-files-dev
-REGION=eu-west-1
-USER_FILES_BUCKET=enclave-file-sharing-dev

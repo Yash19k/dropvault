@@ -1,8 +1,8 @@
 # Built-in simple auth service (email + password), served from the SAME API as
 # the file routes:  /v1/users (POST), /v1/login, /v1/userinfo, /v1/logout,
-# /v1/refresh-token. The file Lambdas still validate callers only through
-# {auth_endpoint}/v1/userinfo, so pointing auth_endpoint at an external service
-# instead (e.g. CognitoApi) remains possible.
+# /v1/refresh-token. File routes are protected by the Lambda authorizer
+# (authorizer.tf), which checks these tokens itself; pointing auth_endpoint at
+# an external service instead makes it ask that service's /v1/userinfo.
 
 locals {
   # The API's own stage URL, built from ids that don't depend on the Lambdas
@@ -32,6 +32,7 @@ data "archive_file" "auth" {
   type        = "zip"
   source_dir  = "${path.module}/../endpoints/auth-service/src"
   output_path = "${path.module}/build/functions/auth.zip"
+  excludes    = ["**/__pycache__/**"]
 }
 
 resource "aws_iam_role_policy" "auth_users" {
@@ -55,12 +56,14 @@ resource "aws_lambda_function" "auth" {
   runtime          = var.lambda_runtime
   role             = aws_iam_role.lambda.arn
   timeout          = 15
-  memory_size      = 1024 # PBKDF2 is CPU-bound; more memory = more CPU = faster logins
+  memory_size      = 1024                                  # PBKDF2 is CPU-bound; more memory = more CPU = faster logins
+  layers           = [aws_lambda_layer_version.common.arn] # tokens.py
 
   environment {
     variables = {
       USERS_TABLE  = aws_dynamodb_table.users.name
       TOKEN_SECRET = random_password.token_secret.result
+      ADMIN_EMAILS = join(",", var.admin_emails) # so sign-in can tell the web app who is an admin
     }
   }
   depends_on = [aws_cloudwatch_log_group.auth]

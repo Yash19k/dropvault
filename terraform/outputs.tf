@@ -22,6 +22,11 @@ output "web_url" {
   value       = local.web_url
 }
 
+output "admin_url" {
+  description = "The admin panel (sign in with an account listed in admin_emails)"
+  value       = "${local.web_url}/admin"
+}
+
 output "web_hosting" {
   value = var.web_hosting
 }
@@ -40,4 +45,9 @@ output "amplify_app_id" {
 
 output "users_table" {
   value = aws_dynamodb_table.users.name
+}
+
+output "alerts_topic_arn" {
+  description = "SNS topic the CloudWatch alarms publish to (subscribe more endpoints if you like)"
+  value       = aws_sns_topic.alerts.arn
 }

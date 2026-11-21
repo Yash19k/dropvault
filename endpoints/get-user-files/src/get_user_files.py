@@ -1,91 +1,35 @@
-#! /usr/bin/env python
-'''Get the list of files owned by the authenticated user (with metadata).'''
+'''List the caller's files and how much of their storage quota they use.
 
-import os
-import json
-import collections
-import boto3
-from boto3.dynamodb.conditions import Attr
-import auth
-import log
+  GET /v1/users/{user_id}/files
+      -> {user_id, user_files: [...], usage: {used_bytes, quota_bytes}}
 
+Reads the user-files index (user_id -> files), so it only touches this
+user's items instead of scanning the whole table.
+'''
 
-LOGGER = log.setup_logging()
-
-CORS_HEADERS = {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Allow': 'GET, OPTIONS',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': '*'
-}
+import api
+import storage
+import usage
 
 
-def get_user_files(user_id):
-    '''Return the user's files with their metadata.'''
-    try:
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table(os.environ['FILE_SHARING_TABLE'])
-        # A Scan returns at most 1 MB per call: follow LastEvaluatedKey, or
-        # files beyond the first page silently disappear from the list.
-        items = []
-        kwargs = {'FilterExpression': Attr('user_id').eq(user_id)}
-        while True:
-            response = table.scan(**kwargs)
-            items.extend(response.get('Items', []))
-            if 'LastEvaluatedKey' not in response:
-                break
-            kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
-        user_files = []
-        for item in items:
-            user_files.append({
-                'file_id': item['file_id'],
-                'file_name': item['file_name'],
-                'content_type': item.get('content_type', 'application/octet-stream'),
-                'size': int(item.get('size', 0)),
-                'uploaded_at': item.get('uploaded_at'),
-                'status': item.get('status', 'READY')
-            })
-        # newest first when we have a timestamp
-        user_files.sort(key=lambda f: f.get('uploaded_at') or '', reverse=True)
-        return user_files
-    except Exception as error:
-        LOGGER.error(error)
-        raise Exception('Internal server error')
+def describe(item):
+    entry = {
+        'file_id': item['file_id'],
+        'file_name': item['file_name'],
+        'content_type': item.get('content_type', 'application/octet-stream'),
+        'size': int(item.get('size', 0)),
+        'uploaded_at': item.get('uploaded_at'),
+        'status': item.get('status', 'READY'),
+        'download_count': int(item.get('download_count', 0)),
+    }
+    if entry['status'] == 'UPLOADING':
+        # a multipart upload can be resumed by uploading the same file again
+        entry['resumable'] = bool(item.get('upload_id'))
+    return entry
 
 
-def build_api_response(user_id, user_files):
-    '''Build the API response.'''
-    response_body = collections.OrderedDict()
-    response_body['user_id'] = user_id
-    response_body['user_files'] = user_files
-    return response_body
-
-
-def init_env_vars():
-    '''Get all environment variables.'''
-    return {'REGION': os.getenv('REGION')}
-
-
-def lambda_handler(event, _):
-    '''Lambda entrypoint.'''
-    try:
-        user_id, _name, _email = auth.resolve_event_user(event)
-        if not user_id:
-            return {'statusCode': 401, 'body': json.dumps({'message': 'Unauthorized'}),
-                    'headers': CORS_HEADERS}
-        if auth.path_param(event, 'user_id', 3) != user_id:
-            return {'statusCode': 403,
-                    'body': json.dumps({'message': 'User not authorized to perform this action'}),
-                    'headers': CORS_HEADERS}
-        user_files = get_user_files(user_id)
-        return {
-            'statusCode': 200,
-            'body': json.dumps(build_api_response(user_id, user_files)),
-            'headers': CORS_HEADERS,
-            'isBase64Encoded': False,
-        }
-    except Exception as error:
-        LOGGER.error({'error_message': '{}'.format(error)})
-        return {'statusCode': 500, 'body': json.dumps({'error_message': 'Internal server error'}),
-                'headers': CORS_HEADERS, 'isBase64Encoded': False}
+@api.route('GET, OPTIONS')
+def lambda_handler(event):
+    user_id, _name, _email = api.require_user(event)
+    files = [describe(item) for item in storage.user_files(user_id)]
+    return 200, {'user_id': user_id, 'user_files': files, 'usage': usage.summary(user_id)}
