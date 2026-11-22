@@ -28,7 +28,8 @@ export default function HowItWorks() {
               </h1>
               <p className="mt-5 max-w-xl text-[17px] leading-relaxed text-muted">
                 {APP_NAME} runs entirely on managed AWS services, all created by Terraform. Select any part of the diagram
-                to see what it does, or pick a request and watch it move through the stack.
+                to see what it does, or pick a request and watch it move through the stack. To build it in your own AWS
+                account, follow the <Link to="/deploy" className="link">deploy guide</Link>.
               </p>
             </div>
             <dl className="grid grid-cols-2 gap-y-5 border-t border-line pt-4 sm:grid-cols-4 lg:min-w-[440px]">
@@ -55,7 +56,7 @@ export default function HowItWorks() {
               <p className="mt-1.5 text-muted">
                 {isAuthenticated
                   ? 'Everything above is what runs when you upload or share.'
-                  : 'Send your first file, or deploy your own copy with one command.'}
+                  : <>Send your first file, or <Link to="/deploy" className="link">deploy your own copy</Link> with one command.</>}
               </p>
             </div>
             <div className="flex flex-wrap gap-3">

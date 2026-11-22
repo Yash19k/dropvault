@@ -6,7 +6,7 @@ import { ThemeToggle } from '../../theme';
 import { useAuth } from '../../context/AuthContext';
 import { APP_NAME, REPO_URL } from '../../brand';
 
-// Header and footer shared by the public pages (landing, how it works).
+// Header and footer shared by the public pages (landing, how it works, deploy guide).
 
 const NAV = 'transition-colors hover:text-fg aria-[current=page]:font-medium aria-[current=page]:text-fg';
 
@@ -27,6 +27,7 @@ export function SiteHeader() {
           {section('#features', 'Features')}
           {section('#lifetime', 'How links end')}
           <Link to="/how-it-works" className={NAV} aria-current={pathname === '/how-it-works' ? 'page' : undefined}>How it works</Link>
+          <Link to="/deploy" className={NAV} aria-current={pathname === '/deploy' ? 'page' : undefined}>Deploy</Link>
           <a href={REPO_URL} target="_blank" rel="noreferrer" className={NAV}>GitHub</a>
         </nav>
         <div className="flex items-center gap-2 sm:gap-3">
@@ -56,6 +57,7 @@ export function SiteFooter() {
         <div className="flex items-center gap-5">
           <div className="sm:hidden"><ThemeToggle /></div>
           <Link to="/how-it-works" className="hover:text-fg">How it works</Link>
+          <Link to="/deploy" className="hover:text-fg">Deploy guide</Link>
           <a href={REPO_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 hover:text-fg">
             <Github className="h-4 w-4" /> Source on GitHub
           </a>

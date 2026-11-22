@@ -4,6 +4,7 @@ import { useAuth } from './context/AuthContext';
 import { Spinner } from './components/ui';
 import Landing from './pages/Landing';
 import HowItWorks from './pages/HowItWorks';
+import DeployGuide from './pages/DeployGuide';
 import Login from './pages/Login';
 import SignUp from './pages/SignUp';
 import DashboardLayout from './pages/dashboard/DashboardLayout';
@@ -50,6 +51,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/how-it-works" element={<HowItWorks />} />
+      <Route path="/deploy" element={<DeployGuide />} />
       <Route path="/login" element={isAuthenticated ? <Navigate to="/app" replace /> : <Login />} />
       <Route path="/signup" element={isAuthenticated ? <Navigate to="/app" replace /> : <SignUp />} />
       <Route path="/app" element={<RequireAuth><DashboardLayout /></RequireAuth>}>
