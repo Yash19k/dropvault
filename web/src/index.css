@@ -187,6 +187,7 @@
   --animate-scan: scan 2.6s ease-in-out infinite;
   --animate-caret: caret 1s steps(1) infinite;
   --animate-pulse-soft: pulse-soft 1.2s ease-in-out infinite;
+  --animate-flow-dash: flow-dash 0.7s linear infinite;
 
   /* the underline under "expire." refills, then runs down like a link's clock */
   @keyframes drain {
@@ -210,6 +211,8 @@
   }
   @keyframes caret { 50% { opacity: 0; } }
   @keyframes pulse-soft { 50% { opacity: 0.45; } }
+  /* the dashes on a lit arrow in the "How it works" diagram travel along it */
+  @keyframes flow-dash { to { stroke-dashoffset: -11; } }
 }
 
 @media (prefers-reduced-motion: reduce) {

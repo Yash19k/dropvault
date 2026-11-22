@@ -1,12 +1,12 @@
 import { Link } from 'react-router-dom';
 import { ArrowRight, Github, RotateCcw, ShieldCheck, Scale } from 'lucide-react';
-import { Logo, LogoMark } from '../components/ui';
-import { ThemeToggle } from '../theme';
+import { LogoMark } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
-import { APP_NAME, REPO_URL } from '../brand';
+import { REPO_URL } from '../brand';
 import HeroDemo from './landing/HeroDemo';
 import Features from './landing/Features';
 import ClockBand from './landing/ClockBand';
+import { SiteFooter, SiteHeader, usePageScroll } from './landing/SiteChrome';
 import { Reveal } from './landing/motion';
 
 const STACK = ['Amazon S3', 'AWS Lambda', 'API Gateway', 'DynamoDB', 'KMS', 'SES', 'Terraform'];
@@ -18,29 +18,10 @@ const PROOF = [
 
 export default function Landing() {
   const { isAuthenticated } = useAuth();
+  usePageScroll();
   return (
     <div className="min-h-screen overflow-x-clip">
-      <header className="sticky top-0 z-40 border-b border-line/70 bg-canvas/75 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
-          <Link to="/" aria-label={`${APP_NAME} home`}><Logo /></Link>
-          <nav className="hidden items-center gap-7 text-sm text-muted md:flex" aria-label="Page">
-            <a href="#features" className="transition-colors hover:text-fg">Features</a>
-            <a href="#lifetime" className="transition-colors hover:text-fg">How links end</a>
-            <a href={REPO_URL} target="_blank" rel="noreferrer" className="transition-colors hover:text-fg">GitHub</a>
-          </nav>
-          <div className="flex items-center gap-2 sm:gap-3">
-            <div className="hidden sm:block"><ThemeToggle /></div>
-            {isAuthenticated ? (
-              <Link to="/app" className="btn-primary">Open app <ArrowRight className="h-4 w-4" /></Link>
-            ) : (
-              <>
-                <Link to="/login" className="btn-ghost">Sign in</Link>
-                <Link to="/signup" className="btn-primary">Get started</Link>
-              </>
-            )}
-          </div>
-        </div>
-      </header>
+      <SiteHeader />
 
       <main>
         {/* Hero */}
@@ -101,6 +82,11 @@ export default function Landing() {
             <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-subtle">Runs serverless on</span>
             <ul className="flex flex-wrap justify-center gap-x-7 gap-y-2 text-sm font-medium text-muted">
               {STACK.map((s) => <li key={s}>{s}</li>)}
+              <li>
+                <Link to="/how-it-works" className="link inline-flex items-center gap-1">
+                  How it works <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              </li>
             </ul>
           </div>
         </div>
@@ -156,20 +142,7 @@ export default function Landing() {
         </section>
       </main>
 
-      <footer className="border-t border-line">
-        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-5 py-8 text-sm text-muted sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <Logo />
-            <span className="text-subtle">© {new Date().getFullYear()}</span>
-          </div>
-          <div className="flex items-center gap-5">
-            <div className="sm:hidden"><ThemeToggle /></div>
-            <a href={REPO_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 hover:text-fg">
-              <Github className="h-4 w-4" /> Source on GitHub
-            </a>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }
