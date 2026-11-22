@@ -123,6 +123,18 @@ variable "web_hosting" {
   }
 }
 
+variable "amplify_branch" {
+  description = "Amplify branch that serves the web app. It is the first part of the address: https://<branch>.<app-id>.amplifyapp.com"
+  type        = string
+  default     = "main"
+}
+
+variable "amplify_redirect_branches" {
+  description = "Old Amplify branches whose addresses should send visitors to the app (e.g. [\"main\"] after renaming amplify_branch)"
+  type        = list(string)
+  default     = []
+}
+
 variable "api_throttle_rate" {
   description = "Steady-state requests per second allowed across the whole API stage"
   type        = number

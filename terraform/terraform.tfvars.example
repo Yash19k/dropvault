@@ -25,6 +25,10 @@ sender_email = "you@example.com"
 # --- Web hosting: "amplify" (works on new accounts) or "cloudfront"
 #     (new AWS accounts must be verified by AWS Support before using CloudFront)
 web_hosting = "amplify"
+# Amplify address: https://<amplify_branch>.<app-id>.amplifyapp.com (default branch "main").
+# To rename it later and keep the old address working:
+# amplify_branch            = "dropvault"
+# amplify_redirect_branches = ["main"] # old branches whose addresses redirect to the app
 
 # --- Extra origins allowed to upload/download directly to S3 (the hosted app is always allowed)
 allowed_origins = ["http://localhost:3001"]

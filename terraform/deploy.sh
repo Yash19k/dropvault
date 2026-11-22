@@ -45,7 +45,30 @@ HOSTING="$(terraform output -raw web_hosting)"
 WEB_BUCKET="$(terraform output -raw web_bucket)"
 DIST_ID="$(terraform output -raw cloudfront_distribution_id)"
 AMPLIFY_APP="$(terraform output -raw amplify_app_id)"
+AMPLIFY_BRANCH="$(terraform output -raw amplify_branch)"
+REDIRECT_BRANCHES="$(terraform output -raw amplify_redirect_branches)"
 MONITOR="$(terraform output -raw monitor_function)"
+
+# Upload a zip (path relative to the current directory) to an Amplify branch
+# and wait for that deployment to finish.
+amplify_publish() {
+  local branch=$1 zip=$2 job url status=""
+  read -r job url < <(awsq amplify create-deployment --app-id "$AMPLIFY_APP" \
+    --branch-name "$branch" --query '[jobId, zipUploadUrl]' --output text)
+  curl -sfg -X PUT -H "Content-Type: application/zip" --data-binary @"$zip" "$url"
+  aws amplify start-deployment --app-id "$AMPLIFY_APP" --branch-name "$branch" \
+    --job-id "$job" "${AWS_ARGS[@]}" >/dev/null
+  for _ in $(seq 1 60); do
+    status="$(awsq amplify get-job --app-id "$AMPLIFY_APP" --branch-name "$branch" \
+      --job-id "$job" --query 'job.summary.status' --output text)"
+    case "$status" in
+      SUCCEED) break ;;
+      FAILED|CANCELLED) echo "Amplify deployment $status"; exit 1 ;;
+    esac
+    sleep 5
+  done
+  echo "    Amplify job $job ($branch): $status"
+}
 
 STEP="building the web app"
 echo "==> building web app against $API_URL"
@@ -55,24 +78,41 @@ VITE_AUTH_URL="$API_URL" VITE_FILE_URL="$API_URL" npx vite build --mode producti
 
 STEP="publishing the web app"
 if [ "$HOSTING" = "amplify" ]; then
-  echo "==> publishing to Amplify app $AMPLIFY_APP (branch main)"
+  echo "==> publishing to Amplify app $AMPLIFY_APP (branch $AMPLIFY_BRANCH)"
   "$PYBIN" -c "import shutil; shutil.make_archive('site', 'zip', 'dist')"
-  read -r JOB_ID UPLOAD_URL < <(awsq amplify create-deployment --app-id "$AMPLIFY_APP" \
-    --branch-name main --query '[jobId, zipUploadUrl]' --output text)
-  curl -sfg -X PUT -H "Content-Type: application/zip" --data-binary @site.zip "$UPLOAD_URL"
+  amplify_publish "$AMPLIFY_BRANCH" site.zip
   rm -f site.zip
-  aws amplify start-deployment --app-id "$AMPLIFY_APP" --branch-name main \
-    --job-id "$JOB_ID" "${AWS_ARGS[@]}" >/dev/null
-  for _ in $(seq 1 60); do
-    STATUS="$(awsq amplify get-job --app-id "$AMPLIFY_APP" --branch-name main \
-      --job-id "$JOB_ID" --query 'job.summary.status' --output text)"
-    case "$STATUS" in
-      SUCCEED) break ;;
-      FAILED|CANCELLED) echo "Amplify deployment $STATUS"; exit 1 ;;
-    esac
-    sleep 5
-  done
-  echo "    Amplify job $JOB_ID: $STATUS"
+
+  # Old addresses (amplify_redirect_branches) get a page that sends visitors to
+  # the same path on the app's address. The SPA rule serves it for every path.
+  if [ -n "$REDIRECT_BRANCHES" ]; then
+    mkdir -p "$HERE/build/redirect"
+    cd "$HERE/build"
+    cat > redirect/index.html <<HTML
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>$APP has moved</title>
+<link rel="canonical" href="$WEB_URL/">
+<script>location.replace('$WEB_URL' + location.pathname + location.search + location.hash);</script>
+<noscript><meta http-equiv="refresh" content="0; url=$WEB_URL/"></noscript>
+</head>
+<body style="font-family: system-ui, sans-serif; margin: 2rem">
+<p>$APP has moved to <a href="$WEB_URL/">$WEB_URL</a>.</p>
+</body>
+</html>
+HTML
+    "$PYBIN" -c "import shutil; shutil.make_archive('redirect-site', 'zip', 'redirect')"
+    for BRANCH in $REDIRECT_BRANCHES; do
+      echo "==> publishing a redirect to $WEB_URL on branch $BRANCH"
+      amplify_publish "$BRANCH" redirect-site.zip
+    done
+    rm -f redirect-site.zip
+  fi
 else
   echo "==> uploading to s3://$WEB_BUCKET"
   # hashed assets: cache for a year; index.html: always revalidate

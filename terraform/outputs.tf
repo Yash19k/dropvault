@@ -43,6 +43,15 @@ output "amplify_app_id" {
   value = local.use_amplify ? aws_amplify_app.web[0].id : ""
 }
 
+output "amplify_branch" {
+  value = local.use_amplify ? aws_amplify_branch.app[0].branch_name : ""
+}
+
+output "amplify_redirect_branches" {
+  description = "Space-separated; deploy.sh publishes the redirect page to each"
+  value       = join(" ", [for b in aws_amplify_branch.redirect : b.branch_name])
+}
+
 output "users_table" {
   value = aws_dynamodb_table.users.name
 }

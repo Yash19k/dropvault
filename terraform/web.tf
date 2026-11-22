@@ -1,5 +1,5 @@
 # Web app hosting. Two options (var.web_hosting):
-#   amplify    -> AWS Amplify Hosting (HTTPS at https://main.<app-id>.amplifyapp.com).
+#   amplify    -> AWS Amplify Hosting (HTTPS at https://<amplify_branch>.<app-id>.amplifyapp.com).
 #                 Works on brand-new accounts. deploy.sh uploads the build as a zip.
 #   cloudfront -> private S3 bucket + CloudFront with Origin Access Control.
 #                 New AWS accounts must be verified by AWS Support before they
@@ -10,7 +10,7 @@ locals {
   use_amplify    = var.web_hosting == "amplify"
   web_url = (local.use_cloudfront
     ? "https://${aws_cloudfront_distribution.web[0].domain_name}"
-  : "https://main.${aws_amplify_app.web[0].default_domain}")
+  : "https://${var.amplify_branch}.${aws_amplify_app.web[0].default_domain}")
 }
 
 # --- Amplify Hosting ----------------------------------------------------------
@@ -27,11 +27,27 @@ resource "aws_amplify_app" "web" {
   }
 }
 
-resource "aws_amplify_branch" "main" {
+resource "aws_amplify_branch" "app" {
   count       = local.use_amplify ? 1 : 0
   app_id      = aws_amplify_app.web[0].id
-  branch_name = "main"
+  branch_name = var.amplify_branch
   stage       = "PRODUCTION"
+}
+
+# Old branch addresses, kept so old links still work: deploy.sh publishes a
+# small page to each that sends visitors to the same path on the app's address.
+resource "aws_amplify_branch" "redirect" {
+  for_each    = local.use_amplify ? toset(var.amplify_redirect_branches) : toset([])
+  app_id      = aws_amplify_app.web[0].id
+  branch_name = each.key
+  stage       = "PRODUCTION"
+}
+
+# The app used to be served from the "main" branch. Keep that branch (it becomes
+# a redirect) instead of deleting it, so the old address never goes down.
+moved {
+  from = aws_amplify_branch.main[0]
+  to   = aws_amplify_branch.redirect["main"]
 }
 
 # --- S3 + CloudFront ----------------------------------------------------------
