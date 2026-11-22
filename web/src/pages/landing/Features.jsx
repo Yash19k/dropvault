@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Clock, Download, UploadCloud, Mail, QrCode, ShieldCheck, BarChart3, Infinity as InfinityIcon, Check } from 'lucide-react';
 import { LINK_EXPIRY, DOWNLOAD_LIMITS } from '../../api/filesApi';
 import { CHANNEL, LINK_STATUS } from '../../lib/meta';
+import { EMAIL_SHARING } from '../../lib/features';
 import FakeQr from './FakeQr';
 import { Reveal, useInView, useInterval, useReducedMotion } from './motion';
 
@@ -19,14 +20,15 @@ export default function Features() {
         text="Stop a link after 1, 3, 5, 10 or 25 downloads. Email scanners and chat previews can’t use up a one-time link.">
         <LimitDemo />
       </Card>
-      <Card icon={UploadCloud} title="Big files, resumable"
+      {/* With the email card hidden, this one widens so the grid stays full. */}
+      <Card className={EMAIL_SHARING ? undefined : 'lg:col-span-2'} icon={UploadCloud} title="Big files, resumable"
         text="Files go straight from your browser to S3. Anything over 100 MB goes up in parts, and you can resume after closing the tab.">
         <PartsDemo />
       </Card>
-      <Card delay={80} icon={Mail} title="Email a whole team"
+      {EMAIL_SHARING && <Card delay={80} icon={Mail} title="Email a whole team"
         text="Send to several people at once. Everyone gets their own link, so you can tell who downloaded and who didn’t.">
         <EmailDemo />
-      </Card>
+      </Card>}
       <Card delay={160} icon={QrCode} title="QR codes"
         text="Every link has a short, scannable code. The quickest way to get a file from your laptop to a phone.">
         <QrDemo />

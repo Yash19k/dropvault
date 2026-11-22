@@ -10,6 +10,7 @@ import { useToast } from '../../components/Toast';
 import { filesApi, LINK_EXPIRY, DEFAULT_EXPIRY, DOWNLOAD_LIMITS } from '../../api/filesApi';
 import { formatBytes, formatDate, formatRelative, fileKind } from '../../lib/format';
 import { KIND_ICON, KIND_LABEL, CHANNEL, LINK_STATUS as STATUS } from '../../lib/meta';
+import { EMAIL_SHARING } from '../../lib/features';
 // The previewer (Markdown renderer included) loads the first time it's opened.
 const Preview = lazy(() => import('./Preview'));
 
@@ -347,7 +348,7 @@ export default function Files() {
           onFiles={(list) => { handleFiles(list); setUploadOpen(false); }} />
       )}
 
-      {shareFor && <ShareModal file={shareFor} userId={userId} idToken={idToken} onClose={() => setShareFor(null)} />}
+      {EMAIL_SHARING && shareFor && <ShareModal file={shareFor} userId={userId} idToken={idToken} onClose={() => setShareFor(null)} />}
       {linkFor && <LinkModal file={linkFor.file} qr={linkFor.qr} userId={userId} idToken={idToken} onClose={() => setLinkFor(null)} />}
       {linksFor && <LinksModal file={linksFor} userId={userId} idToken={idToken} onClose={() => { setLinksFor(null); load(); }} />}
       {previewAt !== null && readyFiles[previewAt] && (
@@ -434,7 +435,7 @@ function FileRow({ f, live, onPreview, onDownload, onShare, onCopy, onQr, onLink
           <>
             <button onClick={onPreview} className="btn-icon" title="Preview" aria-label={`Preview ${f.file_name}`}><Eye className="h-4 w-4" /></button>
             <button onClick={onDownload} className="btn-icon" title="Download" aria-label={`Download ${f.file_name}`}><Download className="h-4 w-4" /></button>
-            <button onClick={onShare} className="btn-icon" title="Share by email" aria-label={`Share ${f.file_name} by email`}><Mail className="h-4 w-4" /></button>
+            {EMAIL_SHARING && <button onClick={onShare} className="btn-icon" title="Share by email" aria-label={`Share ${f.file_name} by email`}><Mail className="h-4 w-4" /></button>}
             <button onClick={onCopy} className="btn-icon" title="Copy link" aria-label={`Copy link to ${f.file_name}`}><Link2 className="h-4 w-4" /></button>
             <button onClick={onQr} className="btn-icon" title="QR code" aria-label={`QR code for ${f.file_name}`}><QrCode className="h-4 w-4" /></button>
             <button onClick={onLinks} className="btn-icon" title="Links & downloads" aria-label={`Links and downloads for ${f.file_name}`}><BarChart3 className="h-4 w-4" /></button>
@@ -861,7 +862,7 @@ function LinksModal({ file, userId, idToken, onClose }) {
       {!data && <div className="grid place-items-center py-10"><Spinner /></div>}
       {data && links.length === 0 && (
         <div className="mt-4 rounded-md border border-dashed border-line px-4 py-8 text-center text-sm text-muted">
-          No links yet. Share the file by email, copy a link, or make a QR code.
+          No links yet. {EMAIL_SHARING ? 'Share the file by email, copy a link, or make a QR code.' : 'Copy a link or make a QR code.'}
         </div>
       )}
       {links.length > 0 && (
