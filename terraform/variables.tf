@@ -255,3 +255,9 @@ variable "links_per_hour" {
   type        = number
   default     = 200
 }
+
+variable "presence_per_ip" {
+  description = "Site heartbeats (analytics) one IP may send per 10 minutes; an open tab sends about 20"
+  type        = number
+  default     = 240
+}

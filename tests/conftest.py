@@ -38,8 +38,14 @@ GB = 1024 ** 3
 def aws(monkeypatch):
     monkeypatch.setenv('USER_QUOTA_BYTES', str(10 * GB))
     monkeypatch.setenv('RATE_LIMIT_TABLE', 'ratelimit-test')
+    monkeypatch.setenv('ANALYTICS_TABLE', 'analytics-test')
     with mock_aws():
         ddb = boto3.client('dynamodb')
+        ddb.create_table(
+            TableName='analytics-test', BillingMode='PAY_PER_REQUEST',
+            KeySchema=[{'AttributeName': 'pk', 'KeyType': 'HASH'}, {'AttributeName': 'sk', 'KeyType': 'RANGE'}],
+            AttributeDefinitions=[{'AttributeName': 'pk', 'AttributeType': 'S'},
+                                  {'AttributeName': 'sk', 'AttributeType': 'S'}])
         ddb.create_table(
             TableName='ratelimit-test', BillingMode='PAY_PER_REQUEST',
             KeySchema=[{'AttributeName': 'id', 'KeyType': 'HASH'}],

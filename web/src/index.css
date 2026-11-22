@@ -35,6 +35,13 @@
   --band-muted: rgb(238 247 244 / 0.68);
   --band-line: rgb(238 247 244 / 0.12);
   --band-accent: #6fd8c4;
+  /* Chart series (admin Analytics), checked for colour-blind separation and
+     contrast on --surface in each theme: teal, orange, violet, in that order. */
+  --viz-1: #00806b;
+  --viz-2: #eb6834;
+  --viz-3: #6250d6;
+  --viz-good: #0b6b3a;
+  --viz-ink: #ffffff;   /* a label inside a strong --viz-1 fill */
   color-scheme: light;
 }
 
@@ -66,6 +73,11 @@
   --band-muted: rgb(238 247 244 / 0.62);
   --band-line: rgb(238 247 244 / 0.1);
   --band-accent: #6fd8c4;
+  --viz-1: #2aa58f;
+  --viz-2: #d95926;
+  --viz-3: #9085e9;
+  --viz-good: #3fbf7f;
+  --viz-ink: #0b0b0b;
   color-scheme: dark;
 }
 
@@ -95,6 +107,10 @@
   --color-band-muted: var(--band-muted);
   --color-band-line: var(--band-line);
   --color-band-accent: var(--band-accent);
+  --color-viz-1: var(--viz-1);
+  --color-viz-2: var(--viz-2);
+  --color-viz-3: var(--viz-3);
+  --color-viz-good: var(--viz-good);
 
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;

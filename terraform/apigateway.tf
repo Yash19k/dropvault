@@ -171,6 +171,7 @@ resource "aws_api_gateway_deployment" "this" {
         filesha1("${path.module}/qr.tf"),
         filesha1("${path.module}/authorizer.tf"),
         filesha1("${path.module}/admin.tf"),
+        filesha1("${path.module}/analytics.tf"),
         filesha1("${path.module}/modules/api-lambda-route/main.tf"),
         filesha1("${path.module}/modules/cors-options/main.tf"),
       ],
@@ -190,6 +191,7 @@ resource "aws_api_gateway_deployment" "this" {
         module.route_links_list.integration_id, module.route_link_revoke.integration_id,
       module.cors_qr.integration_id, module.cors_links.integration_id, module.cors_link_code.integration_id],
       [module.route_admin.integration_id, module.cors_admin.integration_id],
+      [module.route_presence.integration_id, module.cors_presence.integration_id],
       [for r in aws_api_gateway_gateway_response.cors : r.id],
     )))
   }

@@ -23,6 +23,10 @@ so taking away someone's admin role takes effect at once.
   GET    /activity                    sign-ups, uploads, shares, downloads, admin actions
   GET    /system                      configuration and record counts
   GET    /health?range=1h|24h|7d      live checks, CloudWatch metrics, recent errors (health.py)
+  GET    /analytics?range=24h|7d|30d|90d&tz=<minutes east of UTC>
+                                      traffic, engagement and product numbers (analytics.py)
+  GET    /analytics/live              who is on the site now, the last hour, and when each
+                                      account was last seen
 
 Admins can't demote, suspend, sign out, reset or delete their own account or
 an owner admin's (ADMIN_EMAILS), so the panel can never lock everyone out.
@@ -43,6 +47,7 @@ from collections import Counter, defaultdict
 import boto3
 
 import accounts
+import analytics
 import api
 import auth
 import deletion
@@ -52,6 +57,7 @@ import log
 import stats
 import storage
 import usage
+import visits
 
 LOGGER = log.setup_logging()
 AUDIT_PREFIX = 'AUDIT#'
@@ -59,6 +65,7 @@ AUDIT_KEEP_SECONDS = 365 * 86400
 DOWNLOAD_TTL = 300
 DAILY_DAYS = 90
 ACTIVITY_LIMIT = 500
+LAST_SEEN_DAYS = 30
 MAX_QUOTA = 1024 ** 5          # 1 PiB: a sanity cap on per-user limits
 EDITABLE = ('role', 'suspended', 'quota_bytes')
 
@@ -116,6 +123,13 @@ def who(user):
     return user.get('email') or user.get('user_id', 'unknown user')
 
 
+class Helpers:
+    '''What analytics.py needs from this module (it can't import it back).'''
+    file_kind = staticmethod(lambda name, content_type: file_kind(name, content_type))
+    is_ready = staticmethod(lambda item: is_ready(item))
+    iso_ms = staticmethod(lambda value: iso_ms(value))
+
+
 # --- reading everything --------------------------------------------------------
 class Snapshot:
     '''Both tables, read once per request and sorted into their kinds.'''
@@ -154,14 +168,24 @@ class Snapshot:
         return {'user_id': user_id, 'name': user.get('name'), 'email': user.get('email')}
 
 
+class UsersOnly:
+    '''Just the accounts (for the live view, polled often: no files-table scan).'''
+
+    def __init__(self):
+        self.users_by_id = {u['user_id']: u for u in storage.scan_all(accounts.users_table()) if u.get('user_id')}
+
+    brief = Snapshot.brief
+
+
 def file_ref(item, file_id=None):
     if not item:
         return {'file_id': file_id, 'file_name': None, 'size': None}
     return {'file_id': item['file_id'], 'file_name': item['file_name'], 'size': int(item.get('size', 0))}
 
 
-def user_row(user, snap):
+def user_row(user, snap, seen=None):
     user_id = user['user_id']
+    presence = (seen or {}).get(user_id) or {}
     files = snap.files_by_owner.get(user_id, [])
     ready = [f for f in files if is_ready(f)]
     counter = snap.usage.get(user_id)
@@ -185,7 +209,20 @@ def user_row(user, snap):
         'link_count': len(owned_links),
         'active_links': sum(1 for link in owned_links if snap.link_status(link) == 'active'),
         'downloads': sum(int(f.get('download_count', 0)) for f in files),
+        'online': bool(presence.get('online')),
+        'last_seen_at': presence.get('last_seen_at') or None,
     }
+
+
+def last_seen():
+    '''{user_id: {online, last_seen_at}} from the last LAST_SEEN_DAYS of site
+       heartbeats (best effort; older than that, the panel shows the last sign-in).'''
+    try:
+        now = int(time.time())
+        return visits.last_seen_by_user(visits.recent(now, LAST_SEEN_DAYS - 1), now)
+    except Exception:  # pylint: disable=broad-except
+        LOGGER.exception('could not read presence')
+        return {}
 
 
 def file_row(item, snap):
@@ -383,7 +420,7 @@ def user_detail(event, snap, user_id):
     if not user:
         raise api.ApiError(404, 'User not found')
     return {
-        'user': user_row(user, snap),
+        'user': user_row(user, snap, last_seen()),
         'files': by_newest([file_row(f, snap) for f in snap.files_by_owner.get(user_id, [])], 'uploaded_at'),
         'links': by_newest([link_row(event, link, snap) for link in snap.links_by_owner.get(user_id, [])],
                            'created_at', 0),
@@ -597,11 +634,21 @@ def lambda_handler(event):
         if range_key not in health.RANGES:
             raise api.ApiError(400, 'range must be one of: {0}'.format(', '.join(health.RANGES)))
         return 200, health.health(range_key)
+    if method == 'GET' and parts == ['analytics']:
+        range_key = api.query_param(event, 'range') or '7d'
+        if range_key not in analytics.RANGES:
+            raise api.ApiError(400, 'range must be one of: {0}'.format(', '.join(analytics.RANGES)))
+        tz = analytics.parse_tz(api.query_param(event, 'tz'))
+        return 200, analytics.analytics(Snapshot(), range_key, tz, Helpers)
+    if method == 'GET' and parts == ['analytics', 'live']:
+        return 200, analytics.live(UsersOnly())
 
     if head == 'users':
         if size == 1 and method == 'GET':
             snap = Snapshot()
-            rows = sorted((user_row(u, snap) for u in snap.users), key=lambda r: r['created_at'] or 0, reverse=True)
+            seen = last_seen()
+            rows = sorted((user_row(u, snap, seen) for u in snap.users), key=lambda r: r['created_at'] or 0,
+                          reverse=True)
             return 200, {'users': rows, 'default_quota_bytes': usage.default_quota_bytes()}
         if size == 2 and method == 'GET':
             return 200, user_detail(event, Snapshot(), target)

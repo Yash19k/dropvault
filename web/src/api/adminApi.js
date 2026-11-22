@@ -15,6 +15,9 @@ export const adminApi = {
   system: get('/system'),
   // range: '1h' | '24h' | '7d'
   health: (range, token) => apiRequest('GET', `/admin/health?range=${enc(range)}`, { token }),
+  // range: '24h' | '7d' | '30d' | '90d'; tz: minutes east of UTC
+  analytics: (range, tz, token) => apiRequest('GET', `/admin/analytics?range=${enc(range)}&tz=${enc(tz)}`, { token }),
+  live: get('/analytics/live'),
   user: (userId, token) => apiRequest('GET', `/admin/users/${enc(userId)}`, { token }),
 
   // changes: { role?: 'admin'|'user', suspended?: bool, quota_bytes?: number|null }

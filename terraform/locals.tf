@@ -15,6 +15,7 @@ locals {
     delete        = { dir = "delete-user-file", module = "delete_user_file", layers = [] }
     share         = { dir = "share-file", module = "share_file", layers = ["jsonschema"] }
     cleanup       = { dir = "cleanup", module = "cleanup", layers = [] }
+    presence      = { dir = "presence", module = "presence", layers = [] }
   }
 
   # Environment every file Lambda (and the links Lambda) shares.

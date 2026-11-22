@@ -10,6 +10,7 @@ at LocalStack:
   /v1/users/{user_id}/files/...                                    -> the file Lambdas
   /v1/admin/...                                                    -> admin
   /v1/d/{code}                                                     -> qr-link (public)
+  /v1/presence                                                     -> presence (public heartbeats)
 
 Like API Gateway, it runs the real authorizer Lambda before a protected route
 and passes the caller to the handler in requestContext.authorizer.
@@ -40,6 +41,7 @@ BUCKET = 'enclave-files-local'
 TABLE = 'enclave-files-local'
 USERS_TABLE = 'enclave-users-local'
 RATE_LIMIT_TABLE = 'enclave-ratelimits-local'
+ANALYTICS_TABLE = 'enclave-analytics-local'
 SENDER = 'no-reply@enclave.local'
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENDPOINTS = os.path.join(HERE, '..', 'endpoints')
@@ -75,6 +77,7 @@ os.environ.update({
     'FILE_SHARING_TABLE': TABLE,
     'USERS_TABLE': USERS_TABLE,
     'RATE_LIMIT_TABLE': RATE_LIMIT_TABLE,
+    'ANALYTICS_TABLE': ANALYTICS_TABLE,
     'TOKEN_SECRET': token_secret(),
     'APP_ENV': 'local',
     'USER_FILES_BUCKET': BUCKET,
@@ -183,6 +186,13 @@ def bootstrap_aws():
                          KeySchema=[{'AttributeName': 'id', 'KeyType': 'HASH'}],
                          AttributeDefinitions=[{'AttributeName': 'id', 'AttributeType': 'S'}])
         ddb.get_waiter('table_exists').wait(TableName=RATE_LIMIT_TABLE)
+    if ANALYTICS_TABLE not in ddb.list_tables().get('TableNames', []):   # like terraform/analytics.tf
+        ddb.create_table(TableName=ANALYTICS_TABLE, BillingMode='PAY_PER_REQUEST',
+                         KeySchema=[{'AttributeName': 'pk', 'KeyType': 'HASH'},
+                                    {'AttributeName': 'sk', 'KeyType': 'RANGE'}],
+                         AttributeDefinitions=[{'AttributeName': 'pk', 'AttributeType': 'S'},
+                                               {'AttributeName': 'sk', 'AttributeType': 'S'}])
+        ddb.get_waiter('table_exists').wait(TableName=ANALYTICS_TABLE)
     import_legacy_users()
 
     boto3.client('ses', region_name=REGION).verify_email_identity(EmailAddress=SENDER)
@@ -259,6 +269,7 @@ ROUTES = [
     ('DELETE', r'^/v1/users/{0}/files/{0}/links/{0}$'.format(SEG), ('qr-link', 'qr_link'), PROTECTED),
     ('GET', r'^/v1/d/{0}$'.format(SEG), ('qr-link', 'qr_link'), PUBLIC),
     ('POST', r'^/v1/d/{0}$'.format(SEG), ('qr-link', 'qr_link'), PUBLIC),
+    ('POST', r'^/v1/presence$', ('presence', 'presence'), PUBLIC),
 ] + [(method, r'^/v1/admin/.+$', ADMIN, PROTECTED) for method in ('GET', 'POST', 'PATCH', 'DELETE')]
 HANDLERS = {}
 AUTHORIZER = ('authorizer', 'authorizer')
@@ -321,7 +332,8 @@ class Handler(BaseHTTPRequestHandler):
                 'httpMethod': method,
                 'path': path,
                 'headers': {'Authorization': headers.get('authorization'),
-                            'Content-Type': headers.get('content-type')},
+                            'Content-Type': headers.get('content-type'),
+                            'User-Agent': headers.get('user-agent')},
                 'queryStringParameters': dict(urllib.parse.parse_qsl(url.query)) or None,
                 'body': raw or None,
                 'requestContext': {'identity': {'sourceIp': self.client_address[0]}},

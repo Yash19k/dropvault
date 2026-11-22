@@ -10,6 +10,7 @@ import Login from './pages/Login';
 import SignUp from './pages/SignUp';
 import DashboardLayout from './pages/dashboard/DashboardLayout';
 import Files from './pages/dashboard/Files';
+import { Presence } from './lib/presence';
 
 // The admin panel is only downloaded by admins.
 const AdminOverview = lazy(() => import('./pages/admin/Overview'));
@@ -20,6 +21,7 @@ const AdminLinks = lazy(() => import('./pages/admin/Links'));
 const AdminActivity = lazy(() => import('./pages/admin/Activity'));
 const AdminSystem = lazy(() => import('./pages/admin/System'));
 const AdminHealth = lazy(() => import('./pages/admin/Health'));
+const AdminAnalytics = lazy(() => import('./pages/admin/Analytics'));
 
 function RequireAuth({ children }) {
   const { isAuthenticated, renewing } = useAuth();
@@ -49,6 +51,8 @@ function RequireAdmin({ children }) {
 export default function App() {
   const { isAuthenticated } = useAuth();
   return (
+    <>
+    <Presence />
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/how-it-works" element={<HowItWorks />} />
@@ -60,6 +64,7 @@ export default function App() {
       </Route>
       <Route path="/admin" element={<RequireAuth><DashboardLayout /></RequireAuth>}>
         <Route index element={<RequireAdmin><AdminOverview /></RequireAdmin>} />
+        <Route path="analytics" element={<RequireAdmin><AdminAnalytics /></RequireAdmin>} />
         <Route path="users" element={<RequireAdmin><AdminUsers /></RequireAdmin>} />
         <Route path="users/:userId" element={<RequireAdmin><AdminUser /></RequireAdmin>} />
         <Route path="files" element={<RequireAdmin><AdminFiles /></RequireAdmin>} />
@@ -70,5 +75,6 @@ export default function App() {
       </Route>
       <Route path="*" element={<NotFound />} />
     </Routes>
+    </>
   );
 }

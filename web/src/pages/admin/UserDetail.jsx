@@ -10,6 +10,7 @@ import { useToast } from '../../components/Toast';
 import { adminApi } from '../../api/adminApi';
 import { formatBytes, formatCount, formatDate, formatRelative, plural } from '../../lib/format';
 import ActivityList from './ActivityList';
+import { OnlineDot } from './analyticsParts';
 import { FileTable, LinkTable } from './tables';
 import {
   useAdminData, useAction, RefreshButton, StatTile, Segmented, Dimmed, AdminError, LoadingRows,
@@ -129,9 +130,12 @@ export default function UserDetail() {
           <StatTile icon={Files} label="Files" value={formatCount(u.file_count)}
             sub={u.uploading_count ? `${u.uploading_count} uploading` : plural(u.downloads, 'download')} />
           <StatTile icon={Link2} label="Active links" value={formatCount(u.active_links)} sub={`of ${plural(u.link_count, 'link')} made`} />
-          <StatTile icon={History} label="Last sign-in"
-            value={u.last_login_at ? formatRelative(u.last_login_at * 1000) : 'Never'}
-            sub={`${plural(u.login_count, 'sign-in')} · joined ${u.created_at ? formatDate(u.created_at * 1000) : '—'}`} />
+          <StatTile icon={History} label="Last seen"
+            value={u.online
+              ? <span className="inline-flex items-center gap-2 text-viz-good"><OnlineDot className="ring-0" /> Online now</span>
+              : u.last_seen_at ? formatRelative(u.last_seen_at)
+                : u.last_login_at ? formatRelative(u.last_login_at * 1000) : 'Never'}
+            sub={`${plural(u.login_count, 'sign-in')}${u.last_login_at ? `, last ${formatRelative(u.last_login_at * 1000)}` : ''} · joined ${u.created_at ? formatDate(u.created_at * 1000) : '—'}`} />
         </div>
 
         {/* Tabs */}

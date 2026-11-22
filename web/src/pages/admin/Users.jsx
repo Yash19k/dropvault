@@ -8,9 +8,11 @@ import {
   useAdminData, usePaged, PageHeader, RefreshButton, ExportButton, Toolbar, SearchInput, FilterSelect,
   Pagination, Dimmed, AdminError, LoadingRows, EmptyState, Avatar, AccountBadges, quotaTone, TH, TD,
 } from './ui';
+import { OnlineDot, useLive } from './analyticsParts';
 
 const FILTERS = {
   all: 'All users',
+  online: 'Online now',
   admins: 'Admins',
   suspended: 'Suspended',
   no_files: 'No files yet',
@@ -21,13 +23,17 @@ const SORTS = {
   name: 'Name',
   storage: 'Most storage',
   files: 'Most files',
-  seen: 'Last sign-in',
+  seen: 'Last seen',
 };
+
+// When the account was last on the site: its newest heartbeat, or else its last sign-in.
+const lastSeen = (u) => Math.max(u.last_seen_at || 0, (u.last_login_at || 0) * 1000);
 
 const usedPct = (u) => (u.quota_bytes ? (u.used_bytes / u.quota_bytes) * 100 : 0);
 
 const MATCH = {
   all: () => true,
+  online: (u) => u.online,
   admins: (u) => u.role === 'admin',
   suspended: (u) => u.suspended,
   no_files: (u) => u.file_count === 0,
@@ -38,7 +44,7 @@ const ORDER = {
   name: (a, b) => (a.name || a.email).localeCompare(b.name || b.email),
   storage: (a, b) => b.used_bytes - a.used_bytes,
   files: (a, b) => b.file_count - a.file_count,
-  seen: (a, b) => (b.last_login_at || 0) - (a.last_login_at || 0),
+  seen: (a, b) => (Number(b.online) - Number(a.online)) || (lastSeen(b) - lastSeen(a)),
 };
 
 const CSV_COLUMNS = [
@@ -56,6 +62,8 @@ const CSV_COLUMNS = [
   { label: 'Sign-ins', value: (u) => u.login_count },
   { label: 'Joined', value: (u) => isoTime(u.created_at * 1000) },
   { label: 'Last sign-in', value: (u) => isoTime(u.last_login_at && u.last_login_at * 1000) },
+  { label: 'Online now', value: (u) => (u.online ? 'yes' : 'no') },
+  { label: 'Last seen', value: (u) => isoTime(lastSeen(u) || null) },
 ];
 
 export default function Users() {
@@ -65,7 +73,17 @@ export default function Users() {
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('newest');
 
-  const users = data?.users;
+  // Who is online is polled every 15 seconds, so the dots stay current
+  // without reloading the whole list.
+  const live = useLive();
+  const users = useMemo(() => {
+    const seen = live.data?.users;
+    if (!data?.users || !seen) return data?.users;
+    return data.users.map((u) => (seen[u.user_id]
+      ? { ...u, online: seen[u.user_id].online, last_seen_at: Math.max(u.last_seen_at || 0, seen[u.user_id].last_seen_at) }
+      : { ...u, online: false }));
+  }, [data, live.data]);
+  const online = (users || []).filter((u) => u.online).length;
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (users || [])
@@ -83,7 +101,7 @@ export default function Users() {
   return (
     <div>
       <PageHeader title="Users"
-        subtitle={users ? `${plural(users.length, 'account')} · ${plural(admins, 'admin')}${suspended ? ` · ${suspended} suspended` : ''}` : 'Every account in DropVault.'}>
+        subtitle={users ? `${plural(users.length, 'account')} · ${online} online now · ${plural(admins, 'admin')}${suspended ? ` · ${suspended} suspended` : ''}` : 'Every account in DropVault.'}>
         <ExportButton disabled={!visible.length}
           onClick={() => downloadCsv(`dropvault-users-${new Date().toISOString().slice(0, 10)}.csv`, CSV_COLUMNS, visible)} />
         <RefreshButton onClick={reload} loading={loading} />
@@ -110,7 +128,7 @@ export default function Users() {
                   <th className={TH}>User</th>
                   <th className={`${TH} hidden text-right md:table-cell`}>Files</th>
                   <th className={`${TH} hidden sm:table-cell`}>Storage</th>
-                  <th className={`${TH} hidden lg:table-cell`}>Last sign-in</th>
+                  <th className={`${TH} hidden lg:table-cell`}>Last seen</th>
                   <th className={`${TH} hidden xl:table-cell`}>Joined</th>
                   <th className={TH}><span className="sr-only">Open</span></th>
                 </tr>
@@ -124,7 +142,10 @@ export default function Users() {
                     <tr key={u.user_id} className="cursor-pointer transition-colors hover:bg-surface-2" onClick={() => navigate(href)}>
                       <td className={`${TD} w-full max-w-0`}>
                         <div className="flex min-w-0 items-center gap-3">
-                          <Avatar name={u.name} email={u.email} />
+                          <div className="relative shrink-0">
+                            <Avatar name={u.name} email={u.email} />
+                            {u.online && <OnlineDot className="absolute -bottom-0.5 -right-0.5" />}
+                          </div>
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-1.5">
                               <Link to={href} className="truncate font-medium hover:underline underline-offset-2" onClick={(e) => e.stopPropagation()}>
@@ -133,6 +154,7 @@ export default function Users() {
                               <AccountBadges user={u} />
                             </div>
                             <div className="truncate text-xs text-muted">
+                              {u.online && <span className="font-medium text-viz-good lg:hidden">Online now · </span>}
                               {u.email}
                               <span className="sm:hidden"> · {formatBytes(u.used_bytes)}</span>
                             </div>
@@ -152,9 +174,11 @@ export default function Users() {
                             style={{ width: `${u.quota_bytes ? Math.min(100, Math.max(u.used_bytes ? 1 : 0, pct)) : 0}%` }} />
                         </div>
                       </td>
-                      <td className={`${TD} hidden whitespace-nowrap text-muted lg:table-cell`}
-                        title={u.last_login_at ? formatDateTime(u.last_login_at * 1000) : undefined}>
-                        {u.last_login_at ? formatRelative(u.last_login_at * 1000) : 'Never'}
+                      <td className={`${TD} hidden whitespace-nowrap lg:table-cell`}
+                        title={lastSeen(u) ? formatDateTime(lastSeen(u)) : undefined}>
+                        {u.online
+                          ? <span className="inline-flex items-center gap-1.5 font-medium text-viz-good"><OnlineDot className="ring-0" /> Online now</span>
+                          : <span className="text-muted">{lastSeen(u) ? formatRelative(lastSeen(u)) : 'Never'}</span>}
                       </td>
                       <td className={`${TD} hidden whitespace-nowrap text-muted xl:table-cell`}>
                         {u.created_at ? formatDate(u.created_at * 1000) : '—'}

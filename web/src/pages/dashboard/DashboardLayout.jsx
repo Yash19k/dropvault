@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   FolderClosed, LogOut, Menu, X, LayoutDashboard, Users, Files, Link2, History, HeartPulse, Server, KeyRound,
+  ChartLine,
 } from 'lucide-react';
 import { Logo } from '../../components/ui';
 import ChangePasswordDialog from '../../components/ChangePassword';
@@ -11,6 +12,7 @@ import { useAuth } from '../../context/AuthContext';
 const nav = [{ to: '/app', end: true, icon: FolderClosed, label: 'All files' }];
 const adminNav = [
   { to: '/admin', end: true, icon: LayoutDashboard, label: 'Overview' },
+  { to: '/admin/analytics', icon: ChartLine, label: 'Analytics' },
   { to: '/admin/users', icon: Users, label: 'Users' },
   { to: '/admin/files', icon: Files, label: 'Files' },
   { to: '/admin/links', icon: Link2, label: 'Links' },

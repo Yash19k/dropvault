@@ -29,7 +29,16 @@ resource "aws_lambda_function" "fn" {
         SENDER_EMAIL   = var.sender_email
         SENDER_SES_ARN = local.sender_ses_arn
         APP_NAME       = var.display_name
-      } : {}
+      } : {},
+      # Site heartbeats (analytics.tf). With the built-in auth service the
+      # function checks session tokens itself, to link a visit to its account.
+      each.key == "presence" ? merge(
+        {
+          ANALYTICS_TABLE = aws_dynamodb_table.analytics.name
+          PRESENCE_PER_IP = tostring(var.presence_per_ip)
+        },
+        var.auth_endpoint == "" ? { TOKEN_SECRET = random_password.token_secret.result } : {}
+      ) : {}
     )
   }
   depends_on = [aws_cloudwatch_log_group.fn]

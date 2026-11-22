@@ -162,6 +162,7 @@ resource "aws_lambda_function" "admin" {
   environment {
     variables = merge(local.file_env, {
       USERS_TABLE              = aws_dynamodb_table.users.name
+      ANALYTICS_TABLE          = aws_dynamodb_table.analytics.name
       ADMIN_EMAILS             = join(",", var.admin_emails)
       APP_ENV                  = var.environment
       AUTH_MODE                = var.auth_endpoint == "" ? "built-in" : "external"
