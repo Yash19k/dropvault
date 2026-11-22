@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, lazy, Suspense } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   Upload, Search, RefreshCw, Download, Mail, Link2, Trash2, X, Send, QrCode, Copy, Check,
-  AlertTriangle, CheckCircle2, AlertCircle, ArrowDownToLine, Link2Off, Clock, BarChart3, Pause, Play,
+  AlertTriangle, CheckCircle2, AlertCircle, ArrowDownToLine, Link2Off, Clock, BarChart3, Pause, Play, Eye,
 } from 'lucide-react';
 import { Spinner, Modal } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
@@ -10,6 +10,8 @@ import { useToast } from '../../components/Toast';
 import { filesApi, LINK_EXPIRY, DEFAULT_EXPIRY, DOWNLOAD_LIMITS } from '../../api/filesApi';
 import { formatBytes, formatDate, formatRelative, fileKind } from '../../lib/format';
 import { KIND_ICON, KIND_LABEL, CHANNEL, LINK_STATUS as STATUS } from '../../lib/meta';
+// The previewer (Markdown renderer included) loads the first time it's opened.
+const Preview = lazy(() => import('./Preview'));
 
 const SORTS = { date: 'Newest first', name: 'Name', size: 'Largest first' };
 // Uploads run a few at a time: dropping 100 files must not fire 100 uploads
@@ -36,6 +38,7 @@ export default function Files() {
   const [linkFor, setLinkFor] = useState(null); // { file, qr: bool }
   const [linksFor, setLinksFor] = useState(null);
   const [deleteFor, setDeleteFor] = useState(null);
+  const [previewAt, setPreviewAt] = useState(null); // index into readyFiles
   const [uploadOpen, setUploadOpen] = useState(false);
   const inputRef = useRef(null);
   const localFiles = useRef(new Map()); // upload id -> { file, controller } (for pause / resume)
@@ -222,6 +225,14 @@ export default function Files() {
       return (b.uploaded_at || '').localeCompare(a.uploaded_at || '');
     }), [files, query, sort]);
 
+  // Files that can be opened in the preview, in the order shown (prev / next).
+  const readyFiles = useMemo(() => visible.filter((f) => !f.status || f.status === 'READY'), [visible]);
+  const openPreview = (f) => setPreviewAt(readyFiles.findIndex((x) => x.file_id === f.file_id));
+  // The previewed file was deleted or filtered out: close the preview.
+  useEffect(() => {
+    if (previewAt !== null && !readyFiles[previewAt]) setPreviewAt(null);
+  }, [previewAt, readyFiles]);
+
   const totalBytes = useMemo(() => (files || []).reduce((n, f) => n + (Number(f.size) || 0), 0), [files]);
   const openPicker = () => inputRef.current?.click();
   const openUpload = () => setUploadOpen(true);
@@ -280,7 +291,7 @@ export default function Files() {
 
       {/* File table */}
       <div className="panel mt-4 overflow-hidden">
-        <div className="hidden grid-cols-[minmax(0,1fr)_96px_128px_220px] items-center gap-4 border-b border-line bg-surface-2 px-4 py-2 text-xs font-medium text-muted sm:grid">
+        <div className="hidden grid-cols-[minmax(0,1fr)_96px_128px_252px] items-center gap-4 border-b border-line bg-surface-2 px-4 py-2 text-xs font-medium text-muted sm:grid">
           <span>Name</span><span className="text-right">Size</span><span>Uploaded</span><span className="sr-only">Actions</span>
         </div>
 
@@ -305,7 +316,7 @@ export default function Files() {
           <ul className="divide-y divide-line">
             {visible.map((f) => (
               <FileRow key={f.file_id} f={f} live={liveUploads.get(f.file_id)}
-                onDownload={() => download(f)} onShare={() => setShareFor(f)} onCopy={() => setLinkFor({ file: f, qr: false })}
+                onPreview={() => openPreview(f)} onDownload={() => download(f)} onShare={() => setShareFor(f)} onCopy={() => setLinkFor({ file: f, qr: false })}
                 onQr={() => setLinkFor({ file: f, qr: true })} onLinks={() => setLinksFor(f)}
                 onDelete={() => setDeleteFor(f)} />
             ))}
@@ -339,6 +350,12 @@ export default function Files() {
       {shareFor && <ShareModal file={shareFor} userId={userId} idToken={idToken} onClose={() => setShareFor(null)} />}
       {linkFor && <LinkModal file={linkFor.file} qr={linkFor.qr} userId={userId} idToken={idToken} onClose={() => setLinkFor(null)} />}
       {linksFor && <LinksModal file={linksFor} userId={userId} idToken={idToken} onClose={() => { setLinksFor(null); load(); }} />}
+      {previewAt !== null && readyFiles[previewAt] && (
+        <Suspense fallback={<div className="fixed inset-0 z-50 grid place-items-center bg-black/50"><Spinner className="h-5 w-5 text-white" /></div>}>
+          <Preview files={readyFiles} index={previewAt} userId={userId} idToken={getToken() || idToken}
+            onIndex={setPreviewAt} onDownload={download} onClose={() => setPreviewAt(null)} />
+        </Suspense>
+      )}
       {deleteFor && <DeleteModal file={deleteFor} onConfirm={confirmDelete} onClose={() => setDeleteFor(null)} />}
     </div>
   );
@@ -376,19 +393,26 @@ function PendingStatus({ f, live }) {
   return <><Spinner className="h-3.5 w-3.5" /> Uploading…</>;
 }
 
-function FileRow({ f, live, onDownload, onShare, onCopy, onQr, onLinks, onDelete }) {
+function FileRow({ f, live, onPreview, onDownload, onShare, onCopy, onQr, onLinks, onDelete }) {
   const kind = fileKind(f.file_name, f.content_type);
   const Icon = KIND_ICON[kind];
   const pending = f.status && f.status !== 'READY';
   const downloads = f.download_count ? ` · ${f.download_count} ${f.download_count === 1 ? 'download' : 'downloads'}` : '';
   return (
-    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors hover:bg-surface-2 sm:grid-cols-[minmax(0,1fr)_96px_128px_220px]">
+    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors hover:bg-surface-2 sm:grid-cols-[minmax(0,1fr)_96px_128px_252px]">
       <div className="flex min-w-0 items-center gap-3">
         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-line bg-surface-2 text-muted">
           <Icon className="h-4 w-4" />
         </div>
         <div className="min-w-0">
-          <div className="truncate text-sm font-medium" title={f.file_name}>{f.file_name}</div>
+          {pending ? (
+            <div className="truncate text-sm font-medium" title={f.file_name}>{f.file_name}</div>
+          ) : (
+            <button onClick={onPreview} title={`Preview ${f.file_name}`}
+              className="block max-w-full truncate text-left text-sm font-medium hover:text-accent hover:underline hover:underline-offset-2">
+              {f.file_name}
+            </button>
+          )}
           <div className="mt-0.5 text-xs text-muted sm:hidden">
             {KIND_LABEL[kind]} · {formatBytes(f.size)}{f.uploaded_at ? ` · ${formatDate(f.uploaded_at)}` : ''}{downloads}
           </div>
@@ -408,6 +432,7 @@ function FileRow({ f, live, onDownload, onShare, onCopy, onQr, onLinks, onDelete
           </>
         ) : (
           <>
+            <button onClick={onPreview} className="btn-icon" title="Preview" aria-label={`Preview ${f.file_name}`}><Eye className="h-4 w-4" /></button>
             <button onClick={onDownload} className="btn-icon" title="Download" aria-label={`Download ${f.file_name}`}><Download className="h-4 w-4" /></button>
             <button onClick={onShare} className="btn-icon" title="Share by email" aria-label={`Share ${f.file_name} by email`}><Mail className="h-4 w-4" /></button>
             <button onClick={onCopy} className="btn-icon" title="Copy link" aria-label={`Copy link to ${f.file_name}`}><Link2 className="h-4 w-4" /></button>

@@ -72,3 +72,8 @@ def content_disposition(file_name):
     fallback = ''.join(c if 32 <= ord(c) < 127 and c not in '"\\' else '_' for c in file_name)
     return 'attachment; filename="{0}"; filename*=UTF-8\'\'{1}'.format(
         fallback or 'download', quote(file_name, safe=''))
+
+
+def inline_disposition(file_name):
+    '''Like content_disposition, but the browser shows the file (preview).'''
+    return 'inline' + content_disposition(file_name)[len('attachment'):]

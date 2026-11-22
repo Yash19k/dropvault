@@ -22,6 +22,10 @@
 - **Direct-to-S3 uploads, any size.** The browser uploads straight to S3 with presigned URLs and live
   progress. Files over 100 MB go up in parts, four at a time, with automatic retries. You can pause an
   upload and resume it later, even after closing the tab, by adding the same file again.
+- **Preview any file in the app** without downloading it: videos and audio in the browser's full player
+  (seek, speed, full screen), images with zoom and rotate, PDFs, Markdown rendered with an outline of its
+  headings, CSV as a table, formatted JSON, and any text or code file with line numbers. Media streams
+  straight from S3; uploaded HTML is only ever shown as source, never run.
 - **You choose how long links work:** 15 minutes, 1 hour (default), 6 hours, 1 day, 7 days or never.
 - **Download limits (optional):** a link can stop after 1, 3, 5, 10 or 25 downloads. Limited links show a
   Download button first, so email scanners and chat previews don't use up a one-time link.

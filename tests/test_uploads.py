@@ -206,3 +206,26 @@ def test_download_returns_presigned_url(aws):
     status, body, _ = call('download-file', 'download_file', 'GET', '{0}/{1}/download'.format(files_path(), file_id))
     assert status == 200 and body['file_name'] == 'report final.pdf'
     assert 'X-Amz-Signature' in body['download_url']
+
+
+def test_preview_url_shows_the_file_inline(aws):
+    from urllib.parse import parse_qs, urlparse
+    file_id = upload_file(name='report final.pdf')
+    table().update_item(Key={'file_id': file_id}, UpdateExpression='SET content_type = :t',
+                        ExpressionAttributeValues={':t': 'application/pdf'})
+    status, body, _ = call('download-file', 'download_file', 'GET', '{0}/{1}/download'.format(files_path(), file_id),
+                           query={'inline': '1'})
+    assert status == 200 and 'download_url' not in body
+    assert body['content_type'] == 'application/pdf'
+    params = parse_qs(urlparse(body['preview_url']).query)
+    assert params['response-content-disposition'][0].startswith('inline; filename="report final.pdf"')
+    assert params['response-content-type'] == ['application/pdf']
+
+
+def test_preview_never_serves_html_as_a_page(aws):
+    file_id = upload_file(name='page.html')
+    table().update_item(Key={'file_id': file_id}, UpdateExpression='SET content_type = :t',
+                        ExpressionAttributeValues={':t': 'text/html'})
+    status, body, _ = call('download-file', 'download_file', 'GET', '{0}/{1}/download'.format(files_path(), file_id),
+                           query={'inline': '1'})
+    assert status == 200 and body['content_type'].startswith('text/plain')

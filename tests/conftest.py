@@ -96,12 +96,13 @@ def forget(folder, module):
     _LOADED.pop((folder, module), None)
 
 
-def event(method, path, body=None, user='user-1', name='Ada', email='ada@example.com', ip='203.0.113.7'):
+def event(method, path, body=None, user='user-1', name='Ada', email='ada@example.com', ip='203.0.113.7',
+          query=None):
     '''An API Gateway proxy event. user=None means no authorizer context.'''
     ctx = {'domainName': 'api.example.com', 'stage': 'dev', 'identity': {'sourceIp': ip}}
     if user:
         ctx['authorizer'] = {'user_id': user, 'name': name, 'email': email}
-    return {'httpMethod': method, 'path': path, 'headers': {},
+    return {'httpMethod': method, 'path': path, 'headers': {}, 'queryStringParameters': query,
             'body': json.dumps(body) if body is not None else None, 'requestContext': ctx}
 
 

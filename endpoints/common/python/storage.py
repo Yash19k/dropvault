@@ -14,6 +14,7 @@ Two sparse global secondary indexes avoid scanning the table:
 Only the admin panel, which shows everything, scans the table.
 '''
 
+import mimetypes
 import os
 import time
 
@@ -114,3 +115,37 @@ def presigned_download(item, expires_in):
         Params={'Bucket': bucket(), 'Key': object_key(item),
                 'ResponseContentDisposition': content_disposition(item['file_name'])},
         ExpiresIn=expires_in)
+
+
+# Types the browser may render as-is in a preview. Anything else is served as
+# plain text, so an uploaded HTML or SVG page can never run as a web page.
+PREVIEW_TYPES = {
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp', 'image/svg+xml',
+    'image/x-icon', 'image/vnd.microsoft.icon',
+    'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime', 'video/x-matroska', 'video/x-m4v',
+    'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/ogg', 'audio/webm',
+    'audio/flac', 'audio/x-flac', 'audio/aac', 'audio/mp4', 'audio/x-m4a',
+    'application/pdf',
+}
+
+
+def preview_content_type(item):
+    content_type = (item.get('content_type') or '').split(';')[0].strip().lower()
+    if content_type in ('', 'application/octet-stream'):
+        # the browser didn't know the type at upload time: go by the extension
+        content_type = (mimetypes.guess_type(item['file_name'])[0] or '').lower()
+    return content_type if content_type in PREVIEW_TYPES else 'text/plain; charset=utf-8'
+
+
+def presigned_preview(item, expires_in):
+    '''Presigned GET that the browser shows instead of saving (in-app preview):
+       (url, content type it is served with).'''
+    from auth import inline_disposition
+    content_type = preview_content_type(item)
+    url = presign_s3().generate_presigned_url(
+        'get_object',
+        Params={'Bucket': bucket(), 'Key': object_key(item),
+                'ResponseContentDisposition': inline_disposition(item['file_name']),
+                'ResponseContentType': content_type},
+        ExpiresIn=expires_in)
+    return url, content_type

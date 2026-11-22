@@ -15,20 +15,24 @@ locals {
   # Content Security Policy of the web app: scripts only from the app itself
   # (no inline scripts, so injected markup can't run code or steal the session
   # from localStorage), network calls only to this API and the files bucket
-  # (direct uploads), fonts from Google Fonts, and no framing (clickjacking).
+  # (direct uploads and previews), fonts from Google Fonts, and no framing (clickjacking).
+  web_files_origin = "https://${aws_s3_bucket.files.bucket_regional_domain_name}"
   web_connect_src = distinct(compact([
     "'self'",
     "https://${aws_api_gateway_rest_api.api.id}.execute-api.${var.aws_region}.amazonaws.com",
     var.api_domain_name != "" ? "https://${var.api_domain_name}" : "",
     var.auth_endpoint != "" ? regex("^https?://[^/]+", var.auth_endpoint) : "",
-    "https://${aws_s3_bucket.files.bucket_regional_domain_name}",
+    local.web_files_origin,
   ]))
   web_csp = join("; ", [
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
-    "img-src 'self' data: blob:",
+    "img-src 'self' data: blob: ${local.web_files_origin}",
+    # file previews: video/audio stream and PDFs open straight from the bucket
+    "media-src 'self' blob: ${local.web_files_origin}",
+    "frame-src ${local.web_files_origin}",
     "connect-src ${join(" ", local.web_connect_src)}",
     "object-src 'none'",
     "base-uri 'self'",

@@ -209,6 +209,10 @@ export const filesApi = {
   download: (userId, fileId, idToken) =>
     request('GET', `/users/${userId}/files/${fileId}/download`, { token: idToken }),
 
+  // URL that shows the file in the browser (in-app preview) -> { preview_url, content_type }
+  preview: (userId, fileId, idToken) =>
+    request('GET', `/users/${userId}/files/${fileId}/download?inline=1`, { token: idToken }),
+
   // Short (~80 char) public link for copy-link and QR codes; redirects to a
   // fresh download. expiresIn: seconds (see LINK_EXPIRY) or 'never';
   // maxDownloads: a number or null (unlimited).
