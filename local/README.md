@@ -51,8 +51,10 @@ of `server.py`.
 ## Admin panel
 
 Start with `-AdminEmail you@example.com` (or set `ADMIN_EMAILS` for
-`server.py`), sign up with that address, and **Admin** appears in the
-sidebar (`http://localhost:3001/admin`). From there you can make other
+`server.py`). The API window prints a temporary password for that account the
+first time (owner addresses can't be signed up for on the website, as on AWS);
+sign in with it, change it under your name in the sidebar, and **Admin**
+appears in the sidebar (`http://localhost:3001/admin`). From there you can make other
 accounts admins. Everything works offline; on the Health page the tables,
 storage, email and encryption are checked against LocalStack, while the API
 Gateway, Lambda, CloudWatch and log checks exist only on AWS.

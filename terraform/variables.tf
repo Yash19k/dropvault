@@ -212,3 +212,46 @@ variable "alert_utc_offset" {
     error_message = "alert_utc_offset must look like +05:30 or -04:00."
   }
 }
+
+# --- Rate limits (ratelimit.tf). 0 = no limit. ---
+variable "login_attempts_per_ip" {
+  description = "Sign-in attempts allowed from one IP address per 15 minutes (generous: offices and campuses share one IP)"
+  type        = number
+  default     = 100
+}
+
+variable "login_failures_per_account" {
+  description = "Wrong passwords allowed for one account per 15 minutes; then sign-in waits until the window ends"
+  type        = number
+  default     = 10
+}
+
+variable "signups_per_ip" {
+  description = "New accounts allowed from one IP address per hour"
+  type        = number
+  default     = 20
+}
+
+variable "uploads_per_hour" {
+  description = "Uploads one user may start per hour"
+  type        = number
+  default     = 300
+}
+
+variable "max_pending_uploads" {
+  description = "Unfinished uploads one user may have at once (each also reserves its size against the quota)"
+  type        = number
+  default     = 50
+}
+
+variable "share_emails_per_day" {
+  description = "Share emails one user may send per day (UTC). Protects the SES sender's reputation; the SES sandbox allows 200 a day in total"
+  type        = number
+  default     = 50
+}
+
+variable "links_per_hour" {
+  description = "Short links (copy link / QR) one user may create per hour"
+  type        = number
+  default     = 200
+}

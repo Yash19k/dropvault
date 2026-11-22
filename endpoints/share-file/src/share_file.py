@@ -7,6 +7,10 @@ Each recipient gets their own link, so the file's link list shows who has
 downloaded it, a download limit applies to each person separately, and one
 person's link can be turned off without affecting the others.
 
+Each user can send SHARE_EMAILS_PER_DAY share emails a day (UTC), so an
+account can't be used to spam people from this app's verified address (which
+would get it suspended by SES). Emails that couldn't be sent don't count.
+
 An email that can't be sent doesn't stop the others. Its link is removed and
 the answer lists it under `failed` with a reason the sender can read:
   some sent   201 {..., sent: [emails], failed: [{email, reason}]}
@@ -19,11 +23,13 @@ import html
 import os
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 import api
 import links
 import log
+import ratelimit
 import storage
 import validation
 
@@ -33,6 +39,14 @@ SANDBOX_REASON = ('While {0}’s email is in test mode (the Amazon SES sandbox),
                   'verified in SES. Use Copy link and send the link yourself instead.')
 REFUSED_REASON = 'The email service refused to send to this address.'
 SERVICE_REASON = 'The email service couldn’t send it right now. Try again in a few minutes.'
+DAY = 86400
+# SES allows only a few emails a second (1 in the sandbox): back off and retry
+# when it says "Maximum sending rate exceeded" instead of failing the share.
+SES_CONFIG = Config(retries={'mode': 'standard', 'max_attempts': 6})
+
+
+def emails_per_day():
+    return ratelimit.env_limit('SHARE_EMAILS_PER_DAY', 50)
 
 
 class NotSent(Exception):
@@ -98,7 +112,7 @@ def send_email(sender, recipient, file_name, url, ttl, max_downloads):
     '''Send one share email; raises NotSent when SES won't.'''
     app_name = os.getenv('APP_NAME', 'DropVault')
     try:
-        boto3.client('ses', region_name=storage.region()).send_email(
+        boto3.client('ses', region_name=storage.region(), config=SES_CONFIG).send_email(
             Source=os.environ['SENDER_EMAIL'],
             Destination={'ToAddresses': [recipient]},
             Message={
@@ -142,9 +156,22 @@ def lambda_handler(event):
         raise api.ApiError(400, error)
     (user_id, name, _email), item = api.owned_file(event, ready=True)
 
+    # Addresses are case-insensitive: one email (and one link) per person.
+    recipients = list(dict.fromkeys(address.strip().lower() for address in body['share_with']))
+    budget = ratelimit.subject('share-email', user_id)
+    try:
+        ratelimit.hit(budget, emails_per_day(), DAY, cost=len(recipients))
+    except ratelimit.Limited as limited:
+        left = max(0, emails_per_day() - ratelimit.used(budget, DAY))
+        raise api.ApiError(429, 'You can send {0} share emails a day and have {1} left today. Use Copy link to share '
+                                'it another way, or try again in {2}.'.format(
+                                    emails_per_day(), left, ratelimit.wait_text(limited.retry_after)),
+                           headers={'Retry-After': str(limited.retry_after)},
+                           retry_after=limited.retry_after) from None
+
     table, expires_at = storage.table(), None
     sent, failed, service_failed = [], [], False
-    for recipient in body['share_with']:
+    for recipient in recipients:
         url, link_expires = links.create(table, event, item['file_id'], user_id, ttl,
                                          channel='email', max_downloads=max_downloads, recipient=recipient)
         try:
@@ -156,6 +183,7 @@ def lambda_handler(event):
             continue
         sent.append(recipient)
         expires_at = link_expires
+    ratelimit.give_back(budget, DAY, cost=len(failed))
     if not sent:
         raise api.ApiError(502 if service_failed else 422, nothing_sent_message(failed), failed=failed)
     return 201, {'file_id': item['file_id'], 'file_name': item['file_name'], 'status': 'SHARED',

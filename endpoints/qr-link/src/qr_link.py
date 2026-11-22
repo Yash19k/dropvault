@@ -27,10 +27,23 @@ import api
 import auth
 import links
 import log
+import ratelimit
 import storage
 
 LOGGER = log.setup_logging()
 REDIRECT_TTL = 300   # lifetime of the presigned URL behind each download
+# The public pages need nothing but their own inline styles and a form that
+# posts back here (then redirects to S3). No scripts, no framing, no referrer.
+PAGE_HEADERS = {
+    'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; "
+                               "form-action 'self' https://*.amazonaws.com; frame-ancestors 'none'",
+    'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
+}
+
+
+def links_per_hour():
+    return ratelimit.env_limit('LINKS_PER_HOUR', 200)
 
 
 # --- public pages --------------------------------------------------------------
@@ -46,9 +59,7 @@ font-family:'IBM Plex Sans',Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1b
 <h1 style="font-size:19px;margin:0 0 10px;word-break:break-word">{t}</h1>
 <p style="color:#5c5c55;font-size:14px;line-height:1.6;margin:0">{m}</p>{x}</div></body></html>'''.format(
         t=html.escape(title), m=html.escape(message), x=extra)
-    return {'statusCode': status, 'body': body, 'isBase64Encoded': False,
-            'headers': {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
-                        'X-Robots-Tag': 'noindex'}}
+    return {'statusCode': status, 'body': body, 'isBase64Encoded': False, 'headers': dict(PAGE_HEADERS)}
 
 
 def format_size(size):
@@ -103,7 +114,8 @@ def follow_link(event):
         return unusable_page('limit_reached', link)
     return {'statusCode': 303 if event.get('httpMethod') == 'POST' else 302, 'body': '',
             'isBase64Encoded': False,
-            'headers': {'Location': storage.presigned_download(item, REDIRECT_TTL), 'Cache-Control': 'no-store'}}
+            'headers': {'Location': storage.presigned_download(item, REDIRECT_TTL), 'Cache-Control': 'no-store',
+                        'Referrer-Policy': 'no-referrer'}}
 
 
 # --- owner routes ----------------------------------------------------------------
@@ -117,6 +129,7 @@ def create_link(event):
         raise api.ApiError(400, error)
     channel = body.get('channel') if body.get('channel') in ('link', 'qr') else 'link'
     (user_id, _name, _email), item = api.owned_file(event, ready=True)
+    ratelimit.hit(ratelimit.subject('link', user_id), links_per_hour(), 3600)
     short_url, expires_at = links.create(storage.table(), event, item['file_id'], user_id, ttl,
                                          channel=channel, max_downloads=max_downloads)
     return 201, {'short_url': short_url, 'expires_at': expires_at, 'max_downloads': max_downloads}

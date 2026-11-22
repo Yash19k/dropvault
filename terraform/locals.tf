@@ -18,7 +18,7 @@ locals {
   }
 
   # Environment every file Lambda (and the links Lambda) shares.
-  file_env = {
+  file_env = merge(local.file_limits_env, {
     AUTH_ENDPOINT      = local.auth_endpoint
     FILE_SHARING_TABLE = aws_dynamodb_table.files.name
     REGION             = var.aws_region
@@ -26,5 +26,5 @@ locals {
     KMS_MODE           = var.kms_mode
     KMS_ALIAS_PREFIX   = local.prefix
     USER_QUOTA_BYTES   = tostring(var.user_quota_bytes)
-  }
+  })
 }

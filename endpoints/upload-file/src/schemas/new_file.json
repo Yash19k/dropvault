@@ -4,7 +4,8 @@
   "type": "object",
   "title": "New File Schema",
   "required": [
-    "file_name"
+    "file_name",
+    "size"
   ],
   "properties": {
     "file_name": {
@@ -27,7 +28,7 @@
     "size": {
       "$id": "#/properties/size",
       "type": "integer",
-      "title": "The size of the file in bytes. Files over the multipart threshold are uploaded in parts (S3 allows objects up to 5 TiB).",
+      "title": "The exact size of the file in bytes: the upload URLs only accept a body of this size. Files over the multipart threshold are uploaded in parts (S3 allows objects up to 5 TiB).",
       "minimum": 0,
       "maximum": 5497558138880,
       "examples": [1048576]

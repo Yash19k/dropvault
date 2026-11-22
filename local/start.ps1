@@ -1,7 +1,7 @@
 # Start DropVault fully offline: LocalStack (Docker) + local API + web app.
 #   powershell -ExecutionPolicy Bypass -File local\start.ps1            # kms_mode = s3
 #   powershell -ExecutionPolicy Bypass -File local\start.ps1 per_user   # one KMS key per user
-#   ... -AdminEmail you@example.com     # that account (sign up with it) can open /admin
+#   ... -AdminEmail you@example.com     # owner admin: created on start (temporary password in the API window)
 param([string]$KmsMode = "s3", [string]$AdminEmail = "")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot

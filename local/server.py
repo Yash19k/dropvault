@@ -17,7 +17,8 @@ and passes the caller to the handler in requestContext.authorizer.
 On start it creates the S3 bucket (+ CORS), the files and users tables and the
 SES sender identity in LocalStack. Accounts from older versions of this server
 (local/.data/auth.json) are copied into the users table. Set ADMIN_EMAILS
-(comma-separated) to make those accounts admins of the admin panel.
+(comma-separated) to make those accounts admins of the admin panel; a missing
+owner account is created on start and its temporary password printed.
 '''
 
 import importlib.util
@@ -38,6 +39,7 @@ REGION = 'eu-west-1'
 BUCKET = 'enclave-files-local'
 TABLE = 'enclave-files-local'
 USERS_TABLE = 'enclave-users-local'
+RATE_LIMIT_TABLE = 'enclave-ratelimits-local'
 SENDER = 'no-reply@enclave.local'
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENDPOINTS = os.path.join(HERE, '..', 'endpoints')
@@ -72,6 +74,7 @@ os.environ.update({
     'REGION': REGION,
     'FILE_SHARING_TABLE': TABLE,
     'USERS_TABLE': USERS_TABLE,
+    'RATE_LIMIT_TABLE': RATE_LIMIT_TABLE,
     'TOKEN_SECRET': token_secret(),
     'APP_ENV': 'local',
     'USER_FILES_BUCKET': BUCKET,
@@ -175,6 +178,11 @@ def bootstrap_aws():
                          KeySchema=[{'AttributeName': 'email', 'KeyType': 'HASH'}],
                          AttributeDefinitions=[{'AttributeName': 'email', 'AttributeType': 'S'}])
         ddb.get_waiter('table_exists').wait(TableName=USERS_TABLE)
+    if RATE_LIMIT_TABLE not in ddb.list_tables().get('TableNames', []):   # like terraform/ratelimit.tf
+        ddb.create_table(TableName=RATE_LIMIT_TABLE, BillingMode='PAY_PER_REQUEST',
+                         KeySchema=[{'AttributeName': 'id', 'KeyType': 'HASH'}],
+                         AttributeDefinitions=[{'AttributeName': 'id', 'AttributeType': 'S'}])
+        ddb.get_waiter('table_exists').wait(TableName=RATE_LIMIT_TABLE)
     import_legacy_users()
 
     boto3.client('ses', region_name=REGION).verify_email_identity(EmailAddress=SENDER)
@@ -236,6 +244,7 @@ ROUTES = [
     ('POST', r'^/v1/login$', AUTH, PUBLIC),
     ('POST', r'^/v1/refresh-token$', AUTH, PUBLIC),
     ('POST', r'^/v1/logout$', AUTH, PUBLIC),
+    ('POST', r'^/v1/password$', AUTH, PUBLIC),
     ('GET', r'^/v1/userinfo$', AUTH, PUBLIC),
     ('POST', r'^/v1/users/{0}/files$'.format(SEG), ('upload-file', 'upload_file'), PROTECTED),
     ('POST', r'^/v1/users/{0}/files/{0}/parts$'.format(SEG), ('upload-file', 'upload_file'), PROTECTED),
@@ -315,7 +324,7 @@ class Handler(BaseHTTPRequestHandler):
                             'Content-Type': headers.get('content-type')},
                 'queryStringParameters': dict(urllib.parse.parse_qsl(url.query)) or None,
                 'body': raw or None,
-                'requestContext': {},
+                'requestContext': {'identity': {'sourceIp': self.client_address[0]}},
             }
             if protected:
                 caller = authorize(headers.get('authorization'))
@@ -332,11 +341,23 @@ class Handler(BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = handle_any
 
 
+def create_owner_accounts():
+    '''Owner admins can't sign up on the website (no email verification), so
+       make any missing owner account here, like terraform/admin-account.sh.'''
+    users = boto3.resource('dynamodb', region_name=REGION).Table(USERS_TABLE)
+    for email in [e.strip().lower() for e in os.environ['ADMIN_EMAILS'].split(',') if e.strip()]:
+        if users.get_item(Key={'email': email}).get('Item'):
+            continue
+        made = HANDLERS[AUTH]({'action': 'owner_password', 'email': email}, None)
+        print('[auth] Created owner admin {0}, temporary password: {1}'.format(email, made['temporary_password']))
+
+
 def main():
     bootstrap_aws()
     for target in [route[2] for route in ROUTES] + [AUTHORIZER]:
         if target not in HANDLERS:
             HANDLERS[target] = load_handler(*target)
+    create_owner_accounts()
     # Listen on both loopbacks so "localhost" is instant whether it resolves to
     # 127.0.0.1 or ::1 (browsers on Windows try ::1 first).
     server = ThreadingHTTPServer(('127.0.0.1', PORT), Handler)

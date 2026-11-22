@@ -1,6 +1,6 @@
 # Built-in simple auth service (email + password), served from the SAME API as
 # the file routes:  /v1/users (POST), /v1/login, /v1/userinfo, /v1/logout,
-# /v1/refresh-token. File routes are protected by the Lambda authorizer
+# /v1/refresh-token, /v1/password (change password). File routes are protected by the Lambda authorizer
 # (authorizer.tf), which checks these tokens itself; pointing auth_endpoint at
 # an external service instead makes it ask that service's /v1/userinfo.
 
@@ -20,6 +20,9 @@ resource "aws_dynamodb_table" "users" {
     name = "email"
     type = "S"
   }
+
+  # Restore the accounts to any second of the last 35 days (cents a month)
+  point_in_time_recovery { enabled = true }
 }
 
 # HMAC key that signs the session tokens.
@@ -60,11 +63,11 @@ resource "aws_lambda_function" "auth" {
   layers           = [aws_lambda_layer_version.common.arn] # tokens.py
 
   environment {
-    variables = {
+    variables = merge(local.auth_limits_env, {
       USERS_TABLE  = aws_dynamodb_table.users.name
       TOKEN_SECRET = random_password.token_secret.result
       ADMIN_EMAILS = join(",", var.admin_emails) # so sign-in can tell the web app who is an admin
-    }
+    })
   }
   depends_on = [aws_cloudwatch_log_group.auth]
 }
@@ -76,7 +79,7 @@ resource "aws_cloudwatch_log_group" "auth" {
 
 # --- Resources under /v1 (/v1/users already exists in apigateway.tf) ---
 resource "aws_api_gateway_resource" "auth" {
-  for_each    = toset(["login", "userinfo", "logout", "refresh-token"])
+  for_each    = toset(["login", "userinfo", "logout", "refresh-token", "password"])
   rest_api_id = aws_api_gateway_rest_api.api.id
   parent_id   = aws_api_gateway_resource.v1.id
   path_part   = each.key
@@ -84,11 +87,12 @@ resource "aws_api_gateway_resource" "auth" {
 
 locals {
   auth_routes = {
-    signup  = { resource_id = aws_api_gateway_resource.users.id, method = "POST" }
-    login   = { resource_id = aws_api_gateway_resource.auth["login"].id, method = "POST" }
-    info    = { resource_id = aws_api_gateway_resource.auth["userinfo"].id, method = "GET" }
-    logout  = { resource_id = aws_api_gateway_resource.auth["logout"].id, method = "POST" }
-    refresh = { resource_id = aws_api_gateway_resource.auth["refresh-token"].id, method = "POST" }
+    signup   = { resource_id = aws_api_gateway_resource.users.id, method = "POST" }
+    login    = { resource_id = aws_api_gateway_resource.auth["login"].id, method = "POST" }
+    info     = { resource_id = aws_api_gateway_resource.auth["userinfo"].id, method = "GET" }
+    logout   = { resource_id = aws_api_gateway_resource.auth["logout"].id, method = "POST" }
+    refresh  = { resource_id = aws_api_gateway_resource.auth["refresh-token"].id, method = "POST" }
+    password = { resource_id = aws_api_gateway_resource.auth["password"].id, method = "POST" }
   }
 }
 
@@ -110,6 +114,7 @@ module "cors_auth" {
     userinfo      = aws_api_gateway_resource.auth["userinfo"].id
     logout        = aws_api_gateway_resource.auth["logout"].id
     refresh-token = aws_api_gateway_resource.auth["refresh-token"].id
+    password      = aws_api_gateway_resource.auth["password"].id
   }
   source      = "./modules/cors-options"
   rest_api_id = aws_api_gateway_rest_api.api.id

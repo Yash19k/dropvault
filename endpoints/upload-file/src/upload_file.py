@@ -16,6 +16,13 @@ is how a paused upload resumes (even after a page reload).
 Every new file record carries a `ttl` one day out (pushed back while parts
 keep coming). If the upload is never completed DynamoDB deletes the record
 and the cleanup Lambda removes whatever reached S3.
+
+The declared size is binding: every presigned URL (the single PUT and each
+part) signs its exact Content-Length, so S3 refuses a body of any other size.
+Unfinished uploads reserve their size against the quota, a user can have at
+most MAX_PENDING_UPLOADS of them, and can start at most UPLOADS_PER_HOUR
+uploads an hour, so storage can't be filled (or the table flooded) by
+uploads that are never completed.
 '''
 
 import math
@@ -29,6 +36,7 @@ from botocore.exceptions import ClientError
 
 import api
 import log
+import ratelimit
 import storage
 import usage
 import validation
@@ -41,6 +49,14 @@ MIN_PART_SIZE = 16 * MIB               # S3 minimum is 5 MiB; bigger parts = few
 MAX_PARTS = 10000                      # S3 maximum
 MAX_URLS_PER_REQUEST = 100
 PART_URL_TTL = 3600
+
+
+def max_pending_uploads():
+    return ratelimit.env_limit('MAX_PENDING_UPLOADS', 50)
+
+
+def uploads_per_hour():
+    return ratelimit.env_limit('UPLOADS_PER_HOUR', 300)
 
 
 def multipart_threshold():
@@ -132,15 +148,30 @@ def ensure_user_kms_key(user_id):
 
 
 def check_quota(user_id, size):
-    '''Refuse early when the file obviously won't fit (complete-upload makes
-       the final, atomic check).'''
+    '''Refuse early when the file won't fit next to the finished files and
+       the unfinished uploads (complete-upload makes the final, atomic check),
+       or when the user already has too many unfinished uploads.'''
+    pending = storage.pending_uploads(user_id)
+    limit = max_pending_uploads()
+    if limit and len(pending) >= limit:
+        raise api.ApiError(429, 'You have {0} unfinished uploads. Finish or delete some of them first.'.format(
+            len(pending)))
     summary = usage.summary(user_id)
     quota, used = summary['quota_bytes'], summary['used_bytes']
     if not quota:
         return
-    if used + size > quota:
-        raise api.ApiError(413, 'Not enough storage space for this file',
-                           used_bytes=used, quota_bytes=quota)
+    reserved = sum(int(item.get('size', 0)) for item in pending)
+    if used + reserved + size > quota:
+        message = 'Not enough storage space for this file'
+        if reserved and used + size <= quota:
+            message += ' (unfinished uploads are holding some of your space: finish or delete them)'
+        raise api.ApiError(413, message, used_bytes=used, quota_bytes=quota, reserved_bytes=reserved)
+
+
+def part_length(item, number):
+    '''Exact size of one part: part_size, except the last part.'''
+    part_size, size = int(item['part_size']), int(item['size'])
+    return min(part_size, size - (number - 1) * part_size)
 
 
 def create_upload(event):
@@ -152,7 +183,8 @@ def create_upload(event):
 
     file_name = body['file_name']
     content_type = body.get('content_type') or 'application/octet-stream'
-    size = int(body.get('size') or 0)
+    size = int(body['size'])
+    ratelimit.hit(ratelimit.subject('upload', user_id), uploads_per_hour(), 3600)
     check_quota(user_id, size)
 
     file_id = str(uuid.uuid4())
@@ -181,9 +213,10 @@ def create_upload(event):
         if kms_key_arn:
             upload_headers = {'x-amz-server-side-encryption': 'aws:kms',
                               'x-amz-server-side-encryption-aws-kms-key-id': kms_key_arn}
+        # ContentLength is signed: S3 refuses a body of any other size.
         response.update(upload_type='single', upload_headers=upload_headers,
                         upload_url=storage.presign_s3().generate_presigned_url(
-                            'put_object', Params=params, ExpiresIn=3600))
+                            'put_object', Params=dict(params, ContentLength=size), ExpiresIn=3600))
     storage.table().put_item(Item=item)
     return 201, response
 
@@ -224,9 +257,11 @@ def part_urls(event):
 
     signer = storage.presign_s3()
     key = storage.object_key(item)
+    # Each part's exact size is signed, so the parts add up to the declared size.
     response['urls'] = {str(n): signer.generate_presigned_url(
         'upload_part', ExpiresIn=PART_URL_TTL,
-        Params={'Bucket': storage.bucket(), 'Key': key, 'UploadId': item['upload_id'], 'PartNumber': n})
+        Params={'Bucket': storage.bucket(), 'Key': key, 'UploadId': item['upload_id'], 'PartNumber': n,
+                'ContentLength': part_length(item, n)})
         for n in sorted(set(numbers))}
     # still active: don't let the abandoned-upload cleanup take it
     storage.table().update_item(Key={'file_id': item['file_id']}, UpdateExpression='SET #t = :t',

@@ -37,8 +37,13 @@ GB = 1024 ** 3
 @pytest.fixture
 def aws(monkeypatch):
     monkeypatch.setenv('USER_QUOTA_BYTES', str(10 * GB))
+    monkeypatch.setenv('RATE_LIMIT_TABLE', 'ratelimit-test')
     with mock_aws():
         ddb = boto3.client('dynamodb')
+        ddb.create_table(
+            TableName='ratelimit-test', BillingMode='PAY_PER_REQUEST',
+            KeySchema=[{'AttributeName': 'id', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'id', 'AttributeType': 'S'}])
         ddb.create_table(
             TableName='files-test', BillingMode='PAY_PER_REQUEST',
             KeySchema=[{'AttributeName': 'file_id', 'KeyType': 'HASH'}],
@@ -91,9 +96,9 @@ def forget(folder, module):
     _LOADED.pop((folder, module), None)
 
 
-def event(method, path, body=None, user='user-1', name='Ada', email='ada@example.com'):
+def event(method, path, body=None, user='user-1', name='Ada', email='ada@example.com', ip='203.0.113.7'):
     '''An API Gateway proxy event. user=None means no authorizer context.'''
-    ctx = {'domainName': 'api.example.com', 'stage': 'dev'}
+    ctx = {'domainName': 'api.example.com', 'stage': 'dev', 'identity': {'sourceIp': ip}}
     if user:
         ctx['authorizer'] = {'user_id': user, 'name': name, 'email': email}
     return {'httpMethod': method, 'path': path, 'headers': {},

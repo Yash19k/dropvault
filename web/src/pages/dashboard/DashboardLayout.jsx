@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  FolderClosed, LogOut, Menu, X, LayoutDashboard, Users, Files, Link2, History, HeartPulse, Server,
+  FolderClosed, LogOut, Menu, X, LayoutDashboard, Users, Files, Link2, History, HeartPulse, Server, KeyRound,
 } from 'lucide-react';
 import { Logo } from '../../components/ui';
+import ChangePasswordDialog from '../../components/ChangePassword';
 import { ThemeToggle } from '../../theme';
 import { useAuth } from '../../context/AuthContext';
 
@@ -29,7 +30,20 @@ export default function DashboardLayout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
+  const drawer = useRef(null);
   const inAdmin = pathname.startsWith('/admin');
+
+  // Mobile menu: Escape closes it, focus moves into it, the page doesn't scroll behind it.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('keydown', onKey);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    drawer.current?.focus();
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = overflow; };
+  }, [open]);
 
   const navItem = (n) => (
     <NavLink key={n.to} to={n.to} end={n.end} onClick={() => setOpen(false)}
@@ -73,6 +87,10 @@ export default function DashboardLayout() {
             {session?.name && <div className="truncate text-sm font-medium">{session.name}</div>}
             <div className="truncate text-xs text-muted" title={session?.email}>{session?.email}</div>
           </div>
+          <button onClick={() => { setOpen(false); setPasswordOpen(true); }} className="btn-icon"
+            title="Change password" aria-label="Change password">
+            <KeyRound className="h-4 w-4" />
+          </button>
           <button onClick={handleSignOut} className="btn-icon" title="Sign out" aria-label="Sign out">
             <LogOut className="h-4 w-4" />
           </button>
@@ -93,7 +111,8 @@ export default function DashboardLayout() {
       {open && (
         <div className="fixed inset-0 z-50 lg:hidden">
           <div className="absolute inset-0 bg-black/40 dark:bg-black/60" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-0 h-full w-72 max-w-[85vw] border-r border-line bg-surface shadow-lg">
+          <div ref={drawer} role="dialog" aria-modal="true" aria-label="Menu" tabIndex={-1}
+            className="absolute left-0 top-0 h-full w-72 max-w-[85vw] border-r border-line bg-surface shadow-lg outline-none">
             <button onClick={() => setOpen(false)} className="btn-icon absolute right-2 top-3" aria-label="Close menu">
               <X className="h-4 w-4" />
             </button>
@@ -101,6 +120,8 @@ export default function DashboardLayout() {
           </div>
         </div>
       )}
+
+      {passwordOpen && <ChangePasswordDialog onClose={() => setPasswordOpen(false)} />}
 
       <main className="min-w-0 px-4 py-6 sm:px-8 lg:px-10 lg:py-9">
         <div className={`mx-auto ${inAdmin ? 'max-w-6xl' : 'max-w-5xl'}`}><Outlet /></div>

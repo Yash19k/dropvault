@@ -15,9 +15,10 @@ Only the admin panel, which shows everything, scans the table.
 '''
 
 import os
+import time
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 
 USER_FILES_INDEX = 'user-files'
@@ -86,6 +87,17 @@ def user_files(user_id):
     '''All of a user's file items, newest first.'''
     return _query_all(IndexName=USER_FILES_INDEX, KeyConditionExpression=Key('user_id').eq(user_id),
                       ScanIndexForward=False)
+
+
+def pending_uploads(user_id):
+    '''The user's unfinished uploads that haven't been abandoned yet (TTL can
+       take a while to delete expired ones): [{file_id, size, ttl}].'''
+    now = int(time.time())
+    items = _query_all(IndexName=USER_FILES_INDEX, KeyConditionExpression=Key('user_id').eq(user_id),
+                       FilterExpression=Attr('status').eq('UPLOADING'),
+                       ProjectionExpression='file_id, #sz, #t',
+                       ExpressionAttributeNames={'#sz': 'size', '#t': 'ttl'})
+    return [item for item in items if int(item.get('ttl') or now + 1) > now]
 
 
 def file_links(file_id):

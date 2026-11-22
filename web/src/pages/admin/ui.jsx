@@ -15,23 +15,32 @@ import { useToast } from '../../components/Toast';
 // `load` must be stable (a module-level function or a useCallback).
 export function useAdminData(load) {
   const { session } = useAuth();
+  const toast = useToast();
   const token = session.tokens.id_token;
   const [state, setState] = useState({ data: null, error: null, loading: true });
   const alive = useRef(true);
+  const seq = useRef(0);
   useEffect(() => {
     alive.current = true; // StrictMode mounts twice: set it again on every mount
     return () => { alive.current = false; };
   }, []);
 
+  // Only the newest request counts: switching from "7 days" to "1 hour" (or
+  // from one user to another) must not show the slower, older answer.
   const reload = useCallback(async () => {
+    const id = ++seq.current;
     setState((s) => ({ ...s, loading: true }));
     try {
       const data = await load(token);
-      if (alive.current) setState({ data, error: null, loading: false });
+      if (alive.current && id === seq.current) setState({ data, error: null, loading: false });
     } catch (error) {
-      if (alive.current) setState((s) => ({ ...s, error, loading: false }));
+      if (!alive.current || id !== seq.current) return;
+      setState((s) => {
+        if (s.data) toast.error(error);   // keep the old data, but say the refresh failed
+        return { ...s, error: s.data ? null : error, loading: false };
+      });
     }
-  }, [load, token]);
+  }, [load, token, toast]);
 
   useEffect(() => { reload(); }, [reload]);
   return { ...state, reload, token };
@@ -333,7 +342,7 @@ export function ConfirmDialog({ title, children, confirmLabel, confirmIcon: Conf
     }
   };
   return (
-    <Modal onClose={busy ? () => {} : onClose} width="max-w-md"
+    <Modal onClose={busy ? () => {} : onClose} width="max-w-md" label={typeof title === 'string' ? title : undefined}
       footer={<>
         <button className="btn-secondary" onClick={onClose} disabled={busy} autoFocus>Cancel</button>
         <button className={danger ? 'btn-danger' : 'btn-primary'} onClick={confirm} disabled={busy}>

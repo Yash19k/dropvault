@@ -35,7 +35,10 @@
 - **Unfinished uploads clean themselves up** after a day, in DynamoDB and in S3.
 - **Clear dead-link pages.** Someone opening an expired or turned-off link sees a short page that says
   so (and when it expired), not a raw storage error.
-- **Simple accounts.** Name, email and password. Sessions renew automatically for up to 30 days.
+- **Simple accounts.** Name, email and password; change your password from the sidebar. Sessions renew
+  automatically for up to 30 days.
+- **Abuse protection:** rate limits on sign-in (per account and per network), sign-up, uploads, links and
+  share emails, upload sizes fixed by the server, and security headers (CSP, HSTS, no framing) on every page.
 - **Admin panel** at `/admin` for the people you choose: totals and charts of sign-ups, uploads, links
   and downloads; every account, file and link, searchable and exportable as CSV; make admins, suspend
   accounts, set someone's storage limit, reset passwords, sign people out everywhere, delete accounts,
@@ -185,8 +188,12 @@ API     : https://<api-id>.execute-api.<region>.amazonaws.com/dev
 
 After the first deploy, AWS emails `sender_email` a verification link. Click it, or sharing by email won't work.
 
-To use the admin panel, put your email in `admin_emails` in `terraform.tfvars`, deploy, and sign up (or sign
-in) with that address. **Admin** then appears in the sidebar; `terraform output admin_url` prints the link.
+To use the admin panel, put your email in `admin_emails` in `terraform.tfvars`, deploy, then run
+`bash terraform/admin-account.sh`. It creates that account (or resets its password, if you ever lose it) and
+prints a temporary password: sign in with it and change it under your name in the sidebar. **Admin** then
+appears in the sidebar; `terraform output admin_url` prints the link. Owner addresses can't be signed up for on
+the website, because without email verification whoever registered the address first would become an admin;
+the script needs AWS credentials for the account instead.
 
 Run `bash deploy.sh` again after any change. To remove everything (S3 objects included):
 
@@ -214,6 +221,12 @@ The main `terraform.tfvars` settings (see [the example](./terraform/terraform.tf
 | `alert_cooldown_minutes` | `15` | At most one error email per function in this time (the next one says how many were held back) |
 | `alert_utc_offset` | `+00:00` | Time zone of the times in alert emails, e.g. `+05:30` |
 | `authorizer_cache_seconds` | `300` | How long API Gateway remembers a valid token |
+| `api_throttle_rate`, `api_throttle_burst` | `50`, `100` | API Gateway throttling per route (requests/second, burst) |
+| `login_attempts_per_ip`, `login_failures_per_account` | `100`, `10` | Sign-in attempts per IP and wrong passwords per account, per 15 minutes |
+| `signups_per_ip` | `20` | New accounts per IP per hour |
+| `uploads_per_hour`, `max_pending_uploads` | `300`, `50` | Uploads a user may start per hour / have unfinished at once |
+| `share_emails_per_day` | `50` | Share emails per user per day |
+| `links_per_hour` | `200` | Short links per user per hour |
 | `bash_bin`, `python_bin` | `/bin/bash`, `python3` | On Windows: `C:/Program Files/Git/bin/bash.exe` and `python` |
 
 ## API
@@ -230,13 +243,15 @@ saves the token and IDs for you.
 | `POST /login` `{email, password}` | `200 {id_token, access_token, refresh_token, expires_in, role}` (`403` if suspended) |
 | `GET /userinfo` | `200 {user_id, name, email}` |
 | `POST /refresh-token` `{refresh_token}` | `200` new tokens |
+| `POST /password` `{current_password, new_password}` (Bearer access token) | `200` new tokens; every other session ends |
+| `POST /logout` `{access_token}` or `{refresh_token}` (or Bearer) | `200`, ends every session |
 
 **Files**
 
 | Request | Response |
 | --- | --- |
 | `GET /users/{user_id}/files` | `{user_files: [{file_id, file_name, content_type, size, uploaded_at, status, download_count, resumable?}], usage: {used_bytes, quota_bytes}}` |
-| `POST /users/{user_id}/files` `{file_name, content_type, size}` | `201` with `upload_type: "single"` → `{file_id, upload_url, upload_headers}`, or `"multipart"` (over 100 MB) → `{file_id, part_size, part_count}`. `413` if it won't fit in the quota |
+| `POST /users/{user_id}/files` `{file_name, content_type, size}` | `201` with `upload_type: "single"` → `{file_id, upload_url, upload_headers}`, or `"multipart"` (over 100 MB) → `{file_id, part_size, part_count}`. `size` is required and binding: the upload URLs only accept exactly that many bytes. `413` if it won't fit in the quota (unfinished uploads count), `429` with too many unfinished uploads |
 | `PUT {upload_url}` (straight to S3) | single uploads: the file bytes, same `Content-Type`, plus `upload_headers` |
 | `POST /users/{user_id}/files/{file_id}/parts` `{part_numbers, include_uploaded?}` | multipart: `{urls: {"1": url, ...}, uploaded_parts?}`. PUT each part's bytes to its URL |
 | `POST /users/{user_id}/files/{file_id}/complete` | `{file_id, size, status: "READY"}` (`409 {missing_parts}` if parts are missing, `413` over quota) |
@@ -270,6 +285,8 @@ saves the token and IDs for you.
 
 Admins can't change their own role, suspend, sign out, reset or delete their own account, or an owner
 admin's (`400` / `403`), so the panel can't lock everyone out.
+
+Requests over a rate limit get `429 {message, retry_after}` with a `Retry-After` header.
 
 `expires_in` is one of `900`, `3600`, `21600`, `86400`, `604800` (seconds) or `"never"`. It defaults to
 `3600`. `expires_at` is a Unix timestamp, or `null` for links that never expire. `max_downloads` is
@@ -375,6 +392,26 @@ about $1 per user per month. The CloudWatch alarms (one per Lambda plus two for 
 $0.10 each per month after the free 10. The monitor (a Lambda run every 5 minutes, a tiny on-demand
 table, SNS emails) stays inside the free tiers.
 
+## Capacity
+
+What the default settings handle without any change (measured on the live deployment in ap-south-1, with
+the account's default AWS quotas):
+
+| Layer | Limit | What it means |
+| --- | --- | --- |
+| API Gateway throttling | 50 requests/s per route, bursts of 100 (`api_throttle_rate/burst`) | The ceiling. The busiest route (the file list) serves 50/s = 180,000 an hour; downloads through links another 50/s |
+| Lambda | 1,000 concurrent executions; warm requests take 50 to 300 ms | Even at the throttle, every route together needs well under 100 concurrent executions |
+| DynamoDB on-demand | thousands of reads/writes per second, no setup | Never the bottleneck here |
+| S3 | file bytes go browser ↔ S3 directly | Upload/download speed and size don't load the API at all; only S3 transfer costs grow |
+| SES sandbox | 200 emails a day, 1 per second (until you request production access) | The first limit you'll hit: about 200 email shares a day across all users. Copy link and QR have no such limit |
+| Admin panel | reads whole tables | Fine up to about 50,000 files and links; beyond that it needs pre-computed totals |
+
+A signed-in person doing normal work (opening the app, uploading, sharing) makes a request every 10 to 30
+seconds while active, so the defaults comfortably serve **about 1,000 people active at the same moment**,
+which is typically **10,000 to 20,000 daily users** and many more registered accounts. Raise
+`api_throttle_rate`/`api_throttle_burst` (AWS allows 10,000/s per account by default) and request SES
+production access to go further; nothing else in the design changes until hundreds of requests per second.
+
 ## Security notes
 
 - Every bucket is private. Files are only ever reached through presigned URLs that expire within
@@ -386,8 +423,20 @@ table, SNS emails) stays inside the free tiers.
   working for up to `authorizer_cache_seconds` (5 minutes) because API Gateway caches the authorizer's answer.
 - Admins can see and download every file. Choose them carefully: downloads of other people's files are
   recorded in the audit log, and the people concerned aren't notified.
-- Sign-up is intentionally simple: there's no email verification, MFA or rate limiting on login.
-  For production use, add those or point `auth_endpoint` at a managed auth service.
+- Sign-in is rate limited: 10 wrong passwords lock an account for the rest of a 15-minute window, and
+  each IP gets 100 attempts per 15 minutes. Someone who knows your address can therefore keep your sign-in
+  waiting by guessing wrong on purpose; an admin can still reset the password. Limits fail open: if their
+  table can't be reached, requests go ahead rather than locking everyone out.
+- Sign-up is intentionally simple: no email verification or MFA (20 sign-ups per IP per hour). For production
+  use with untrusted users, add those or point `auth_endpoint` at a managed auth service.
+- Upload sizes are fixed by the server: each presigned URL signs its exact `Content-Length`, so S3 refuses a
+  bigger body, and unfinished uploads reserve their size against the quota. Users can't park extra data in S3.
+- Share emails are limited to 50 per user per day, so an account can't spam people from your verified sender
+  (which would get SES sending suspended). User-supplied names and file names are escaped in emails.
+- The web app sends a strict Content-Security-Policy (no inline scripts; network calls only to this API and
+  the files bucket), HSTS, `X-Frame-Options: DENY` and `nosniff`. API answers are `Cache-Control: no-store`.
+  Session tokens live in `localStorage`, which the CSP protects against injected scripts.
+- Both DynamoDB tables have point-in-time recovery (any second of the last 35 days).
 - New AWS accounts start in the **SES sandbox**, which only sends to verified addresses. Request
   production access in the SES console to email anyone.
 

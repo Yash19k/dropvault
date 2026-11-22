@@ -24,7 +24,7 @@ resource "aws_lambda_function" "authorizer" {
   runtime          = var.lambda_runtime
   role             = aws_iam_role.lambda.arn
   timeout          = 10
-  memory_size      = 256
+  memory_size      = 512 # 2x the CPU of 256 MB: cold starts and boto3 calls about twice as fast, similar cost
   layers           = [aws_lambda_layer_version.common.arn]
 
   environment {

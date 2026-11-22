@@ -65,3 +65,13 @@ output "monitor_function" {
   description = "The monitor Lambda (log-error emails + scheduled health check). deploy.sh runs it after a deploy."
   value       = aws_lambda_function.monitor.function_name
 }
+
+output "owner_admins" {
+  description = "Owner admins (admin_emails), comma-separated. Set up or recover their accounts with admin-account.sh"
+  value       = join(",", var.admin_emails)
+}
+
+output "auth_function" {
+  description = "The auth Lambda; admin-account.sh invokes it directly to set up an owner admin's account"
+  value       = aws_lambda_function.auth.function_name
+}

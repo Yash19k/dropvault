@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Loader2, Eye, EyeOff, X } from 'lucide-react';
 import { APP_NAME } from '../brand';
 
@@ -54,23 +54,59 @@ export function PasswordField({ label, hint, ...props }) {
   );
 }
 
-// Popup shell: dimmed backdrop, click-outside and Escape to close.
-export function Modal({ onClose, title, icon: Icon, children, footer, width = 'max-w-md' }) {
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), '
+  + 'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+// Popup shell: dimmed backdrop, click-outside and Escape to close. Focus moves
+// into the dialog (unless a field has autoFocus), Tab stays inside it, and
+// focus goes back to where it was when it closes. Tall dialogs scroll on
+// small screens instead of being cut off.
+export function Modal({ onClose, title, label, icon: Icon, children, footer, width = 'max-w-md' }) {
+  const ref = useRef(null);
+  const titleId = useId();
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { closeRef.current(); return; }
+      if (e.key !== 'Tab' || !ref.current) return;
+      const items = [...ref.current.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+      if (!items.length) { e.preventDefault(); ref.current.focus(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const at = document.activeElement;
+      if (e.shiftKey && (at === first || at === ref.current || !ref.current.contains(at))) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && (at === last || !ref.current.contains(at))) {
+        e.preventDefault(); first.focus();
+      }
+    };
     window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  useEffect(() => {
+    const previous = document.activeElement;
+    if (ref.current && !ref.current.contains(document.activeElement)) ref.current.focus();
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = overflow; };
-  }, [onClose]);
+    return () => {
+      document.body.style.overflow = overflow;
+      if (previous && typeof previous.focus === 'function' && document.contains(previous)) previous.focus();
+    };
+  }, []);
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4 dark:bg-black/60" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined}
-        className={`panel w-full shadow-lg ${width}`} onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 dark:bg-black/60">
+      <div className="flex min-h-full items-center justify-center p-4" onClick={onClose}>
+        <div ref={ref} role="dialog" aria-modal="true" tabIndex={-1}
+          aria-labelledby={title ? titleId : undefined}
+          aria-label={title ? undefined : label}
+          className={`panel w-full shadow-lg outline-none ${width}`} onClick={(e) => e.stopPropagation()}>
         {title && (
           <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
-            <h2 className="flex min-w-0 items-center gap-2 text-[15px] font-semibold">
+            <h2 id={titleId} className="flex min-w-0 items-center gap-2 text-[15px] font-semibold">
               {Icon && <Icon className="h-4 w-4 shrink-0 text-muted" />}
               <span className="truncate">{title}</span>
             </h2>
@@ -83,6 +119,7 @@ export function Modal({ onClose, title, icon: Icon, children, footer, width = 'm
         {footer && (
           <div className="flex justify-end gap-2 rounded-b-lg border-t border-line bg-surface-2 px-5 py-3">{footer}</div>
         )}
+        </div>
       </div>
     </div>
   );

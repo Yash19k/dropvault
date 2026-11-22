@@ -11,6 +11,38 @@ locals {
   web_url = (local.use_cloudfront
     ? "https://${aws_cloudfront_distribution.web[0].domain_name}"
   : "https://${var.amplify_branch}.${aws_amplify_app.web[0].default_domain}")
+
+  # Content Security Policy of the web app: scripts only from the app itself
+  # (no inline scripts, so injected markup can't run code or steal the session
+  # from localStorage), network calls only to this API and the files bucket
+  # (direct uploads), fonts from Google Fonts, and no framing (clickjacking).
+  web_connect_src = distinct(compact([
+    "'self'",
+    "https://${aws_api_gateway_rest_api.api.id}.execute-api.${var.aws_region}.amazonaws.com",
+    var.api_domain_name != "" ? "https://${var.api_domain_name}" : "",
+    var.auth_endpoint != "" ? regex("^https?://[^/]+", var.auth_endpoint) : "",
+    "https://${aws_s3_bucket.files.bucket_regional_domain_name}",
+  ]))
+  web_csp = join("; ", [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: blob:",
+    "connect-src ${join(" ", local.web_connect_src)}",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ])
+  web_security_headers = {
+    "Strict-Transport-Security" = "max-age=31536000; includeSubDomains"
+    "X-Content-Type-Options"    = "nosniff"
+    "X-Frame-Options"           = "DENY"
+    "Referrer-Policy"           = "strict-origin-when-cross-origin"
+    "Permissions-Policy"        = "camera=(), microphone=(), geolocation=(), payment=()"
+    "Content-Security-Policy"   = local.web_csp
+  }
 }
 
 # --- Amplify Hosting ----------------------------------------------------------
@@ -18,6 +50,14 @@ resource "aws_amplify_app" "web" {
   count    = local.use_amplify ? 1 : 0
   name     = "${local.prefix}-web"
   platform = "WEB"
+
+  # Security headers on every response (all branches, including redirects)
+  custom_headers = yamlencode({
+    customHeaders = [{
+      pattern = "**"
+      headers = [for key, value in local.web_security_headers : { key = key, value = value }]
+    }]
+  })
 
   # SPA routing: any path without a file extension serves index.html
   custom_rule {
@@ -95,12 +135,13 @@ resource "aws_cloudfront_distribution" "web" {
   }
 
   default_cache_behavior {
-    target_origin_id       = "web"
-    viewer_protocol_policy = "redirect-to-https"
-    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
-    cached_methods         = ["GET", "HEAD"]
-    compress               = true
-    cache_policy_id        = "658327ea-f89d-4fab-a63d-7e88639e58f6" # managed CachingOptimized
+    target_origin_id           = "web"
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = ["GET", "HEAD", "OPTIONS"]
+    cached_methods             = ["GET", "HEAD"]
+    compress                   = true
+    cache_policy_id            = "658327ea-f89d-4fab-a63d-7e88639e58f6" # managed CachingOptimized
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.web[0].id
   }
 
   # SPA routing: unknown paths (e.g. /app, /login) serve index.html
@@ -123,6 +164,41 @@ resource "aws_cloudfront_distribution" "web" {
 
   viewer_certificate {
     cloudfront_default_certificate = true
+  }
+}
+
+# The same security headers as the Amplify option.
+resource "aws_cloudfront_response_headers_policy" "web" {
+  count = local.use_cloudfront ? 1 : 0
+  name  = "${local.prefix}-web-security"
+
+  security_headers_config {
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      include_subdomains         = true
+      override                   = true
+    }
+    content_type_options { override = true }
+    frame_options {
+      frame_option = "DENY"
+      override     = true
+    }
+    referrer_policy {
+      referrer_policy = "strict-origin-when-cross-origin"
+      override        = true
+    }
+    content_security_policy {
+      content_security_policy = local.web_csp
+      override                = true
+    }
+  }
+
+  custom_headers_config {
+    items {
+      header   = "Permissions-Policy"
+      value    = local.web_security_headers["Permissions-Policy"]
+      override = true
+    }
   }
 }
 

@@ -397,8 +397,15 @@ def auth(path, body):
 def test_auth_reports_role_records_logins_and_refuses_suspended(aws, monkeypatch):
     forget('auth-service', 'auth_service')
     monkeypatch.setenv('ADMIN_EMAILS', 'owner@example.com')
-    status, owner = auth('/v1/users', {'full_name': 'Owner', 'email': 'owner@example.com', 'password': 'longpassword'})
-    assert status == 201 and owner['role'] == 'admin'
+    # nobody can claim the owner admin's address through sign-up (no email verification) ...
+    status, body = auth('/v1/users', {'full_name': 'Owner', 'email': 'owner@example.com', 'password': 'longpassword'})
+    assert status == 409 and body['message'] == 'An account with this email already exists'
+    # ... the owner sets it up with terraform/admin-account.sh (a direct Lambda invocation)
+    made = load('auth-service', 'auth_service').lambda_handler(
+        {'action': 'owner_password', 'email': 'owner@example.com'}, None)
+    assert made['created'] is True and len(made['temporary_password']) == 12
+    status, owner = auth('/v1/login', {'email': 'owner@example.com', 'password': made['temporary_password']})
+    assert status == 200 and owner['role'] == 'admin'
     status, member = auth('/v1/users', {'full_name': 'Mem', 'email': 'mem@example.com', 'password': 'longpassword'})
     assert member['role'] == 'user'
 

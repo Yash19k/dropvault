@@ -12,15 +12,17 @@ import { formatBytes, formatDate, formatRelative, fileKind } from '../../lib/for
 import { KIND_ICON, KIND_LABEL, CHANNEL, LINK_STATUS as STATUS } from '../../lib/meta';
 
 const SORTS = { date: 'Newest first', name: 'Name', size: 'Largest first' };
+// Uploads run a few at a time: dropping 100 files must not fire 100 uploads
+// (and 400 API calls) at once, which would trip the API's rate limits.
+const PARALLEL_UPLOADS = 3;
+const ACTIVE = new Set(['uploading', 'queued']);
 
 export default function Files() {
-  const { session } = useAuth();
+  // getToken() reads the current token at call time: long uploads outlive one.
+  const { session, getToken } = useAuth();
   const toast = useToast();
   const userId = session.userId;
   const idToken = session.tokens.id_token;
-  // Long uploads outlive one token: they read the current one through a ref.
-  const tokenRef = useRef(idToken);
-  tokenRef.current = idToken;
 
   const [files, setFiles] = useState(null);
   const [usage, setUsage] = useState(null); // { used_bytes, quota_bytes (0 = unlimited) }
@@ -37,17 +39,51 @@ export default function Files() {
   const [uploadOpen, setUploadOpen] = useState(false);
   const inputRef = useRef(null);
   const localFiles = useRef(new Map()); // upload id -> { file, controller } (for pause / resume)
+  const queue = useRef([]); // upload ids waiting for a free slot
+  const running = useRef(0);
+  const loadSeq = useRef(0);
+  const reloadTimer = useRef(null);
 
+  // Only the newest list request may update the page: an older answer that
+  // arrives late would bring back a file deleted in the meantime.
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setLoading(true);
     try {
-      const r = await filesApi.list(userId, idToken);
+      const r = await filesApi.list(userId, getToken() || idToken);
+      if (seq !== loadSeq.current) return;
       setFiles(r.user_files || []);
       setUsage(r.usage || null);
-    } catch (err) { toast.error(err); } finally { setLoading(false); }
-  }, [userId, idToken, toast]);
+    } catch (err) {
+      if (seq === loadSeq.current) toast.error(err);
+    } finally {
+      if (seq === loadSeq.current) setLoading(false);
+    }
+  }, [userId, idToken, getToken, toast]);
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  // Many uploads starting and finishing together share one list reload.
+  const reloadSoon = useCallback(() => {
+    clearTimeout(reloadTimer.current);
+    reloadTimer.current = setTimeout(() => loadRef.current(), 600);
+  }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Leaving the page pauses uploads in progress (big ones resume when the same
+  // file is added again); closing the tab mid-upload asks first.
+  useEffect(() => () => {
+    clearTimeout(reloadTimer.current);
+    queue.current = [];
+    localFiles.current.forEach((entry) => entry.controller?.abort());
+  }, []);
+  const uploading = uploads.some((u) => ACTIVE.has(u.status));
+  useEffect(() => {
+    if (!uploading) return undefined;
+    const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [uploading]);
 
   const patchUpload = (id, patch) => setUploads((u) => u.map((x) => (x.id === id ? { ...x, ...patch } : x)));
 
@@ -59,31 +95,53 @@ export default function Files() {
     patchUpload(id, { status: 'uploading' });
     try {
       await filesApi.upload({
-        userId, file: entry.file, signal: controller.signal,
-        getToken: () => tokenRef.current,
-        onStarted: (fileId, resumable) => { patchUpload(id, { fileId, resumable }); load(); },
+        userId, file: entry.file, signal: controller.signal, getToken,
+        onStarted: (fileId, resumable) => { patchUpload(id, { fileId, resumable }); reloadSoon(); },
         onProgress: (p) => patchUpload(id, { progress: p }),
       });
       patchUpload(id, { progress: 100, status: 'done' });
       localFiles.current.delete(id);
-      load();
+      reloadSoon();
     } catch (err) {
-      if (err.aborted) { patchUpload(id, { status: 'paused' }); return; }
+      if (err.aborted || !localFiles.current.has(id)) { patchUpload(id, { status: 'paused' }); return; }
       patchUpload(id, { status: err.resumable ? 'paused' : 'error' });
       if (!err.resumable) localFiles.current.delete(id);
-      if (err.status === 413) load();
+      if (err.status === 413) reloadSoon();
       toast.error(err.resumable ? `${entry.file.name}: ${err.message} You can resume the upload.` : err);
     }
   };
 
-  const pauseUpload = (id) => localFiles.current.get(id)?.controller?.abort();
+  // Start queued uploads while there is a free slot.
+  const pump = () => {
+    while (running.current < PARALLEL_UPLOADS && queue.current.length) {
+      const id = queue.current.shift();
+      running.current += 1;
+      runUpload(id).finally(() => { running.current -= 1; pumpRef.current(); });
+    }
+  };
+  const pumpRef = useRef(pump);
+  pumpRef.current = pump;
+  const enqueue = (id) => {
+    patchUpload(id, { status: 'queued' });
+    queue.current.push(id);
+    pump();
+  };
+
+  const pauseUpload = (id) => {
+    if (queue.current.includes(id)) {   // not started yet
+      queue.current = queue.current.filter((q) => q !== id);
+      patchUpload(id, { status: 'paused' });
+      return;
+    }
+    localFiles.current.get(id)?.controller?.abort();
+  };
 
   const handleFiles = (fileList) => {
     const list = [...fileList];
     // The server has the final say, but say "no room" before uploading anything.
     const quota = usage?.quota_bytes || 0;
     let room = quota ? quota - (usage.used_bytes || 0)
-      - uploads.filter((u) => u.status === 'uploading').reduce((n, u) => n + u.size, 0) : Infinity;
+      - uploads.filter((u) => ACTIVE.has(u.status)).reduce((n, u) => n + u.size, 0) : Infinity;
     list.forEach((file) => {
       if (file.size > room) {
         toast.error(`Not enough storage for "${file.name}" (${formatBytes(file.size)}). `
@@ -93,9 +151,10 @@ export default function Files() {
       room -= file.size;
       const id = Math.random().toString(36).slice(2);
       localFiles.current.set(id, { file });
-      setUploads((u) => [...u, { id, name: file.name, size: file.size, progress: 0, status: 'uploading' }]);
-      runUpload(id);
+      setUploads((u) => [...u, { id, name: file.name, size: file.size, progress: 0, status: 'queued' }]);
+      queue.current.push(id);
     });
+    pump();
   };
 
   // Drop files anywhere on the page. A ref keeps the window listeners pointed
@@ -109,8 +168,10 @@ export default function Files() {
     const leave = (e) => { if (hasFiles(e)) { depth = Math.max(0, depth - 1); if (!depth) setDragging(false); } };
     const over = (e) => { if (hasFiles(e)) e.preventDefault(); };
     const drop = (e) => {
-      if (!e.dataTransfer?.files?.length) return;
-      e.preventDefault(); depth = 0; setDragging(false);
+      depth = 0; setDragging(false);   // every drop ends the drag, wherever it lands
+      // The upload dialog's drop zone handles its own drops.
+      if (!e.dataTransfer?.files?.length || e.target.closest?.('[data-dropzone]')) return;
+      e.preventDefault();
       handleFilesRef.current(e.dataTransfer.files);
     };
     window.addEventListener('dragenter', enter);
@@ -135,7 +196,20 @@ export default function Files() {
   };
 
   const confirmDelete = async (f) => {
-    await filesApi.remove(userId, f.file_id, idToken);
+    await filesApi.remove(userId, f.file_id, getToken() || idToken);
+    loadSeq.current += 1;   // a list request already on its way must not bring the row back
+    setLoading(false);
+    // Deleting a file that is still uploading stops that upload for good (a
+    // later "Resume" would otherwise upload the deleted file again).
+    const live = uploads.find((u) => u.fileId === f.file_id);
+    if (live) {
+      queue.current = queue.current.filter((q) => q !== live.id);
+      const entry = localFiles.current.get(live.id);
+      localFiles.current.delete(live.id);
+      entry?.controller?.abort();
+      setUploads((u) => u.filter((x) => x.id !== live.id));
+    }
+    filesApi.forgetUpload(f.file_id);
     setFiles((list) => list.filter((x) => x.file_id !== f.file_id));
     toast.success(`Deleted ${f.file_name}.`);
   };
@@ -155,7 +229,7 @@ export default function Files() {
   // Successful uploads leave the tray on their own a few seconds after the
   // last one finishes; failed and paused ones stay so they aren't missed.
   useEffect(() => {
-    const busy = uploads.some((u) => u.status === 'uploading');
+    const busy = uploads.some((u) => ACTIVE.has(u.status));
     if (busy || !uploads.some((u) => u.status === 'done')) return undefined;
     const t = setTimeout(() => setUploads((u) => u.filter((x) => x.status !== 'done')), 4000);
     return () => clearTimeout(t);
@@ -252,8 +326,8 @@ export default function Files() {
       )}
 
       {uploads.length > 0 && (
-        <UploadTray uploads={uploads} onPause={pauseUpload} onResume={runUpload}
-          onClear={() => setUploads((u) => u.filter((x) => x.status === 'uploading'))} />
+        <UploadTray uploads={uploads} onPause={pauseUpload} onResume={enqueue}
+          onClear={() => setUploads((u) => u.filter((x) => ACTIVE.has(x.status)))} />
       )}
       {uploadOpen && (
         <UploadModal
@@ -367,8 +441,9 @@ function SkeletonRows() {
 function UploadModal({ onClose, onChoose, onFiles }) {
   const [over, setOver] = useState(false);
   const drop = (e) => {
-    // Stop here so the page-wide drop handler doesn't upload the same files again.
-    e.preventDefault(); e.stopPropagation(); setOver(false);
+    // The page-wide drop handler skips drops on [data-dropzone], so the files
+    // aren't uploaded twice, but still sees the drop and ends its overlay.
+    e.preventDefault(); setOver(false);
     if (e.dataTransfer.files?.length) onFiles(e.dataTransfer.files);
   };
   return (
@@ -398,7 +473,7 @@ function UploadModal({ onClose, onChoose, onFiles }) {
 }
 
 function UploadTray({ uploads, onClear, onPause, onResume }) {
-  const active = uploads.filter((u) => u.status === 'uploading').length;
+  const active = uploads.filter((u) => ACTIVE.has(u.status)).length;
   const failed = uploads.filter((u) => u.status === 'error').length;
   const paused = uploads.filter((u) => u.status === 'paused').length;
   const title = active
@@ -420,12 +495,14 @@ function UploadTray({ uploads, onClear, onPause, onResume }) {
               {u.status === 'done' && <CheckCircle2 className="h-4 w-4 shrink-0 text-accent" />}
               {u.status === 'error' && <AlertCircle className="h-4 w-4 shrink-0 text-danger" />}
               {u.status === 'uploading' && <Spinner className="h-4 w-4 shrink-0 text-muted" />}
+              {u.status === 'queued' && <Clock className="h-4 w-4 shrink-0 text-subtle" />}
               {u.status === 'paused' && <Pause className="h-4 w-4 shrink-0 text-muted" />}
               <span className="min-w-0 flex-1 truncate" title={u.name}>{u.name}</span>
               <span className={`shrink-0 font-mono text-xs ${u.status === 'error' ? 'text-danger' : 'text-muted'}`}>
-                {u.status === 'error' ? 'Failed' : u.status === 'done' ? formatBytes(u.size) : `${u.progress}%`}
+                {u.status === 'error' ? 'Failed' : u.status === 'done' ? formatBytes(u.size)
+                  : u.status === 'queued' ? 'Waiting' : `${u.progress}%`}
               </span>
-              {u.status === 'uploading' && u.resumable && (
+              {((u.status === 'uploading' && u.resumable) || u.status === 'queued') && (
                 <button onClick={() => onPause(u.id)} className="btn-icon -my-1 h-7 w-7" title="Pause" aria-label={`Pause ${u.name}`}>
                   <Pause className="h-3.5 w-3.5" />
                 </button>
@@ -497,9 +574,9 @@ function ShareModal({ file, userId, idToken, onClose }) {
   };
 
   return (
-    <Modal onClose={onClose} title="Share by email" icon={Mail}
+    <Modal onClose={busy ? () => {} : onClose} title="Share by email" icon={Mail}
       footer={<>
-        <button className="btn-secondary" onClick={onClose}>Cancel</button>
+        <button className="btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
         <button className="btn-primary" onClick={submit} disabled={busy}>
           {busy ? <Spinner /> : <><Send className="h-4 w-4" /> Send link</>}
         </button>
@@ -622,12 +699,16 @@ function LinkModal({ file, qr, userId, idToken, onClose }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const copy = async (url) => {
+  const copy = async (url, afterRequest = false) => {
     try {
       await navigator.clipboard.writeText(url);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch (err) { toast.error(err); }
+    } catch (err) {
+      // Safari only copies straight from a click; after waiting for the server
+      // it refuses. The link exists: the Copy link button (a fresh click) works.
+      toast.error(afterRequest ? 'Link created. Press Copy link to copy it.' : err);
+    }
   };
 
   const create = async () => {
@@ -636,7 +717,7 @@ function LinkModal({ file, qr, userId, idToken, onClose }) {
       const r = await filesApi.createLink(userId, file.file_id, idToken,
         { expiresIn: expiry, maxDownloads: limit, channel: qr ? 'qr' : 'link' });
       setLink({ url: r.short_url, expiresAt: r.expires_at, maxDownloads: r.max_downloads });
-      if (!qr) await copy(r.short_url);
+      if (!qr) await copy(r.short_url, true);
     } catch (err) { toast.error(err); } finally { setBusy(false); }
   };
 
@@ -808,7 +889,7 @@ function DeleteModal({ file, onConfirm, onClose }) {
   };
 
   return (
-    <Modal onClose={busy ? () => {} : onClose} width="max-w-sm"
+    <Modal onClose={busy ? () => {} : onClose} width="max-w-sm" label="Delete file"
       footer={<>
         <button className="btn-secondary" onClick={onClose} disabled={busy} autoFocus>Cancel</button>
         <button className="btn-danger" onClick={confirm} disabled={busy}>

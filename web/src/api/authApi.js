@@ -25,5 +25,7 @@ export const authApi = {
   login: (b) => request('POST', '/login', { body: b }),
   refreshToken: (b) => request('POST', '/refresh-token', { body: b }),
   logout: (b) => request('POST', '/logout', { body: b }),
+  // { current_password, new_password } -> fresh tokens (other devices are signed out)
+  changePassword: (accessToken, b) => request('POST', '/password', { body: b, token: accessToken }),
   userInfo: (idToken) => request('GET', '/userinfo', { token: idToken }),
 };

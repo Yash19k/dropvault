@@ -52,4 +52,7 @@ resource "aws_dynamodb_table" "files" {
 
   stream_enabled   = true
   stream_view_type = "OLD_IMAGE"
+
+  # Restore files, links and usage records to any second of the last 35 days
+  point_in_time_recovery { enabled = true }
 }

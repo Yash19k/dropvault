@@ -11,6 +11,7 @@ import json
 
 import auth
 import log
+import ratelimit
 import storage
 
 LOGGER = log.setup_logging()
@@ -19,9 +20,10 @@ LOGGER = log.setup_logging()
 class ApiError(Exception):
     '''An expected failure that becomes an HTTP error response.'''
 
-    def __init__(self, status, message, **extra):
+    def __init__(self, status, message, headers=None, **extra):
         super().__init__(message)
         self.status = status
+        self.headers = headers or {}
         self.body = dict({'message': message}, **extra)
 
 
@@ -31,6 +33,11 @@ def cors_headers(methods):
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': methods,
         'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+        'Access-Control-Expose-Headers': 'Retry-After',
+        # API answers carry tokens and private file data: never cache them,
+        # and never let a browser guess a different content type.
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
     }
 
 
@@ -61,12 +68,21 @@ def route(methods):
                 status, body = result
                 return json_response(status, body, headers)
             except ApiError as error:
-                return json_response(error.status, error.body, headers)
+                return json_response(error.status, error.body, dict(headers, **error.headers))
+            except ratelimit.Limited as limited:
+                return too_many(limited, headers)
             except Exception:  # pylint: disable=broad-except
                 LOGGER.exception('unhandled error')
                 return json_response(500, {'message': 'Internal server error'}, headers)
         return handler
     return wrap
+
+
+def too_many(limited, headers, message=None):
+    '''429 with Retry-After, for a request over one of the rate limits.'''
+    text = message or 'Too many requests. Try again in {0}.'.format(ratelimit.wait_text(limited.retry_after))
+    return json_response(429, {'message': text, 'retry_after': limited.retry_after},
+                         dict(headers, **{'Retry-After': str(limited.retry_after)}))
 
 
 def json_body(event):

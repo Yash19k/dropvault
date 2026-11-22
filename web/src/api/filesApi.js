@@ -74,6 +74,10 @@ function saveResume(key, value) {
 export function resumableFileIds() {
   return new Set(Object.values(readResume()).map((v) => v.fileId));
 }
+// The file was deleted: never try to resume its upload.
+function forgetUpload(fileId) {
+  Object.entries(readResume()).forEach(([key, value]) => { if (value.fileId === fileId) saveResume(key, null); });
+}
 
 const PARALLEL_PARTS = 4;
 const PART_RETRIES = 4;
@@ -137,6 +141,8 @@ async function uploadParts({ userId, getToken, fileId, file, partSize, partCount
 }
 
 export const filesApi = {
+  forgetUpload,
+
   // Full upload of one File. getToken() returns the current id token (long
   // uploads outlive a single token). Small files go up in one PUT; big ones in
   // parts that survive dropped connections and can be resumed later, even

@@ -98,7 +98,7 @@ if [ "$HOSTING" = "amplify" ]; then
 <meta name="robots" content="noindex">
 <title>$APP has moved</title>
 <link rel="canonical" href="$WEB_URL/">
-<script>location.replace('$WEB_URL' + location.pathname + location.search + location.hash);</script>
+<script src="/go.js"></script>
 <noscript><meta http-equiv="refresh" content="0; url=$WEB_URL/"></noscript>
 </head>
 <body style="font-family: system-ui, sans-serif; margin: 2rem">
@@ -106,6 +106,9 @@ if [ "$HOSTING" = "amplify" ]; then
 </body>
 </html>
 HTML
+    # a file, not an inline script: the site's Content-Security-Policy refuses inline scripts
+    printf "location.replace('%s' + location.pathname + location.search + location.hash);\n" "$WEB_URL" \
+      > redirect/go.js
     "$PYBIN" -c "import shutil; shutil.make_archive('redirect-site', 'zip', 'redirect')"
     for BRANCH in $REDIRECT_BRANCHES; do
       echo "==> publishing a redirect to $WEB_URL on branch $BRANCH"
@@ -148,3 +151,6 @@ echo
 echo "Deployed."
 echo "  Web app : $WEB_URL"
 echo "  API     : $API_URL"
+if [ -n "$(terraform output -raw owner_admins)" ]; then
+  echo "  Admin   : $WEB_URL/admin  (first time, or forgot the password: bash terraform/admin-account.sh)"
+fi

@@ -5,10 +5,27 @@ Routes (API Gateway REST, Lambda proxy):
   POST /v1/users          {full_name, email, password} -> tokens + user_id + role (signed in)
   POST /v1/login          {email, password}            -> tokens + role (403 if suspended)
   POST /v1/refresh-token  {refresh_token}              -> new tokens + role
-  POST /v1/logout         Authorization: Bearer <access token> (or {access_token})
-                                                        -> 200, ends every session
+  POST /v1/logout         Authorization: Bearer <access token> (or {access_token}
+                          or {refresh_token})           -> 200, ends every session
+  POST /v1/password       Authorization: Bearer <access token>
+                          {current_password, new_password} -> new tokens; signs out
+                                                        every other device
   GET  /v1/userinfo       Authorization: Bearer <id or access token>
                                                         -> {user_id, name, email}
+
+Rate limits (ratelimit.py in the shared layer, all configurable):
+  sign-in      LOGIN_PER_IP attempts per IP and LOGIN_FAILURES wrong passwords
+               per account, per 15 minutes (429 + Retry-After after that)
+  sign-up      SIGNUPS_PER_IP per IP per hour
+  password     wrong current passwords count as failed sign-ins
+
+The owner admins (ADMIN_EMAILS) can't be signed up for through the API,
+because there is no email verification: whoever registered the address first
+would become an admin. The owner sets up (or recovers) that account with
+terraform/admin-account.sh, which invokes this Lambda directly - something
+only AWS credentials for the account allow:
+  {"action": "owner_password", "email": "...", "name"?: "..."}
+      -> {email, temporary_password, created}
 
 /v1/userinfo is what lets any other service (or an external setup without the
 API Gateway authorizer) validate a caller. Users live in DynamoDB (key: email);
@@ -34,6 +51,7 @@ import uuid
 import boto3
 
 import accounts
+import ratelimit
 import tokens
 
 TABLE = boto3.resource('dynamodb').Table(os.environ['USERS_TABLE'])
@@ -43,18 +61,42 @@ MAX_EMAIL = 254
 MAX_NAME = 100
 MAX_PASSWORD = 256
 EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+WINDOW = 15 * 60          # sign-in limits count per 15 minutes
+SIGNUP_WINDOW = 3600      # sign-up limit counts per hour
 
 CORS_HEADERS = {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+    'Access-Control-Expose-Headers': 'Retry-After',
+    'Cache-Control': 'no-store',          # answers carry tokens
+    'X-Content-Type-Options': 'nosniff',
 }
+EXISTS = 'An account with this email already exists'
 
 
-def respond(status, body):
-    return {'statusCode': status, 'headers': CORS_HEADERS,
+def respond(status, body, headers=None):
+    return {'statusCode': status, 'headers': dict(CORS_HEADERS, **(headers or {})),
             'body': json.dumps(body), 'isBase64Encoded': False}
+
+
+def too_many(limited, message):
+    return respond(429, {'message': message.format(ratelimit.wait_text(limited.retry_after)),
+                         'retry_after': limited.retry_after},
+                   {'Retry-After': str(limited.retry_after)})
+
+
+def login_per_ip():
+    return ratelimit.env_limit('LOGIN_PER_IP', 100)
+
+
+def login_failures():
+    return ratelimit.env_limit('LOGIN_FAILURES', 10)
+
+
+def signups_per_ip():
+    return ratelimit.env_limit('SIGNUPS_PER_IP', 20)
 
 
 # --- passwords (PBKDF2-SHA256, shared with the admin panel's password reset) --
@@ -105,7 +147,11 @@ def record_login(user):
 
 
 # --- routes ------------------------------------------------------------------
-def sign_up(body):
+def sign_up(body, event):
+    try:
+        ratelimit.hit(ratelimit.subject('signup-ip', ratelimit.source_ip(event)), signups_per_ip(), SIGNUP_WINDOW)
+    except ratelimit.Limited as limited:
+        return too_many(limited, 'Too many new accounts from your network. Try again in {0}.')
     email = text(body, 'email').strip().lower()
     name = ' '.join(text(body, 'full_name').split())   # collapse whitespace / newlines
     password = text(body, 'password')
@@ -115,6 +161,10 @@ def sign_up(body):
         return respond(400, {'message': 'Full name must be at most {0} characters'.format(MAX_NAME)})
     if len(password) < 8 or len(password) > MAX_PASSWORD:
         return respond(400, {'message': 'Password must be 8 to {0} characters'.format(MAX_PASSWORD)})
+    if email in accounts.owner_emails():
+        # Same answer as a taken address: an owner admin's account is set up
+        # with terraform/admin-account.sh, never by whoever signs up first.
+        return respond(409, {'message': EXISTS})
     now = int(time.time())
     user = {'email': email, 'user_id': str(uuid.uuid4()), 'name': name,
             'password': hash_password(password), 'created_at': now,
@@ -122,23 +172,47 @@ def sign_up(body):
     try:
         TABLE.put_item(Item=user, ConditionExpression='attribute_not_exists(email)')
     except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
-        return respond(409, {'message': 'An account with this email already exists'})
+        return respond(409, {'message': EXISTS})
     return respond(201, dict(issue_tokens(user), user_id=user['user_id'], email=email))
 
 
-def login(body):
+def count_failure(fail_key):
+    '''One more wrong password for this account (the attempt itself is
+       answered either way).'''
+    try:
+        ratelimit.hit(fail_key, login_failures(), WINDOW)
+    except ratelimit.Limited:
+        pass
+
+
+def login(body, event):
     email = text(body, 'email').strip().lower()
     password = text(body, 'password')[:MAX_PASSWORD]
+    fail_key = ratelimit.subject('login-fail', email)
+    try:
+        ratelimit.hit(ratelimit.subject('login-ip', ratelimit.source_ip(event)), login_per_ip(), WINDOW)
+    except ratelimit.Limited as limited:
+        return too_many(limited, 'Too many sign-in attempts from your network. Try again in {0}.')
+    try:
+        # Counted per address whether or not the account exists, so the
+        # answer doesn't reveal which addresses have accounts.
+        ratelimit.check(fail_key, login_failures(), WINDOW)
+    except ratelimit.Limited as limited:
+        return too_many(limited, 'Too many wrong passwords for this account. Try again in {0}, '
+                                 'or ask an administrator to reset your password.')
     user = None
     if email and len(email) <= MAX_EMAIL:
         user = TABLE.get_item(Key={'email': email}).get('Item')
     if not user:
         check_password(password, DUMMY_HASH)
+        count_failure(fail_key)
         return respond(401, {'message': 'Incorrect email or password'})
     if not check_password(password, user['password']):
+        count_failure(fail_key)
         return respond(401, {'message': 'Incorrect email or password'})
     if accounts.is_suspended(user):
         return respond(403, {'message': SUSPENDED})
+    ratelimit.clear(fail_key, WINDOW)
     record_login(user)
     return respond(200, issue_tokens(user))
 
@@ -160,8 +234,11 @@ def bearer(headers):
 
 
 def logout(headers, body):
-    '''End all of the caller's sessions, on every device.'''
-    claims = verify(bearer(headers) or text(body, 'access_token'), ('id', 'access'))
+    '''End all of the caller's sessions, on every device. Takes the access
+       token, or the refresh token (the access token may have expired while
+       the tab slept, and the refresh token is the one worth ending).'''
+    claims = (verify(bearer(headers) or text(body, 'access_token'), ('id', 'access'))
+              or verify(text(body, 'refresh_token'), ('refresh',)))
     if claims:
         try:
             TABLE.update_item(
@@ -175,15 +252,85 @@ def logout(headers, body):
     return respond(200, {'message': 'Logged out'})
 
 
-def userinfo(headers):
+def current_user(headers):
+    '''(claims, account) for a signed-in caller whose session is still live
+       (not signed out, suspended or deleted), else (None, None).'''
     claims = verify(bearer(headers), ('id', 'access'))
+    if not claims:
+        return None, None
+    user = TABLE.get_item(Key={'email': claims['email']}).get('Item')
+    if not accounts.session_valid(user, claims):
+        return None, None
+    return claims, user
+
+
+def userinfo(headers):
+    claims, _user = current_user(headers)
     if not claims:
         return respond(401, {'message': 'Unauthorized'})
     return respond(200, {'user_id': claims['sub'], 'name': claims['name'],
                          'email': claims['email']})
 
 
+def change_password(headers, body):
+    '''The caller sets a new password. Every other session ends; this one
+       gets fresh tokens so it stays signed in.'''
+    claims, user = current_user(headers)
+    if not claims:
+        return respond(401, {'message': 'Unauthorized'})
+    fail_key = ratelimit.subject('login-fail', user['email'])
+    try:
+        ratelimit.check(fail_key, login_failures(), WINDOW)
+    except ratelimit.Limited as limited:
+        return too_many(limited, 'Too many wrong passwords for this account. Try again in {0}.')
+    new_password = text(body, 'new_password')
+    if not check_password(text(body, 'current_password')[:MAX_PASSWORD], user['password']):
+        count_failure(fail_key)
+        return respond(400, {'message': 'Your current password is incorrect'})
+    if len(new_password) < 8 or len(new_password) > MAX_PASSWORD:
+        return respond(400, {'message': 'Password must be 8 to {0} characters'.format(MAX_PASSWORD)})
+    try:
+        updated = TABLE.update_item(
+            Key={'email': user['email']},
+            UpdateExpression='SET password = :p, password_changed_at = :now ADD token_version :one',
+            ConditionExpression='user_id = :uid AND password = :old',
+            ExpressionAttributeValues={':p': hash_password(new_password), ':now': int(time.time()), ':one': 1,
+                                       ':uid': user['user_id'], ':old': user['password']},
+            ReturnValues='ALL_NEW')['Attributes']
+    except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
+        return respond(409, {'message': 'Your password was changed somewhere else. Sign in again.'})
+    return respond(200, dict(issue_tokens(updated), message='Password changed'))
+
+
+def owner_password(event):
+    '''Direct invocation only (terraform/admin-account.sh): create an owner
+       admin's account, or give it a new temporary password.'''
+    email = str(event.get('email') or '').strip().lower()
+    if email not in accounts.owner_emails():
+        return {'error': '{0} is not in admin_emails'.format(email or 'That address')}
+    password = accounts.temporary_password()
+    now = int(time.time())
+    name = ' '.join(str(event.get('name') or '').split())[:MAX_NAME] or 'Admin'
+    try:
+        TABLE.put_item(Item={'email': email, 'user_id': str(uuid.uuid4()), 'name': name,
+                             'password': hash_password(password), 'created_at': now},
+                       ConditionExpression='attribute_not_exists(email)')
+        created = True
+    except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
+        TABLE.update_item(Key={'email': email},
+                          UpdateExpression='SET password = :p, password_reset_at = :now '
+                                           'REMOVE suspended_at ADD token_version :one',
+                          ExpressionAttributeValues={':p': hash_password(password), ':now': now, ':one': 1})
+        created = False
+    ratelimit.clear(ratelimit.subject('login-fail', email), WINDOW)
+    print('owner account {0}: {1}'.format('created' if created else 'password reset', email))
+    return {'email': email, 'temporary_password': password, 'created': created}
+
+
 def lambda_handler(event, _context):
+    event = event or {}
+    if 'httpMethod' not in event and event.get('action') == 'owner_password':
+        return owner_password(event)   # direct invocation; API Gateway always sets httpMethod
     method = event.get('httpMethod')
     path = (event.get('path') or '').rstrip('/')
     headers = event.get('headers') or {}
@@ -196,9 +343,11 @@ def lambda_handler(event, _context):
 
     try:
         if method == 'POST' and path.endswith('/v1/users'):
-            return sign_up(body)
+            return sign_up(body, event)
         if method == 'POST' and path.endswith('/v1/login'):
-            return login(body)
+            return login(body, event)
+        if method == 'POST' and path.endswith('/v1/password'):
+            return change_password(headers, body)
         if method == 'POST' and path.endswith('/v1/refresh-token'):
             return refresh(body)
         if method == 'POST' and path.endswith('/v1/logout'):

@@ -12,7 +12,7 @@ select = ["E", "F", "W", "B", "I"]
 ignore = ["B904"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["accounts", "api", "auth", "deletion", "health", "links", "log", "stats", "storage", "tokens", "usage", "validation", "conftest"]
+known-first-party = ["accounts", "api", "auth", "deletion", "health", "links", "log", "ratelimit", "stats", "storage", "tokens", "usage", "validation", "conftest"]
 
 [tool.ruff.lint.per-file-ignores]
 # inline-styled HTML templates (emails and link pages)

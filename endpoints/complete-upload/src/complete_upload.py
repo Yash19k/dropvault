@@ -19,6 +19,18 @@ import usage
 LOGGER = log.setup_logging()
 
 
+def already_completed(item):
+    '''True if a parallel call has already stitched this upload together.'''
+    current = storage.get_file(item['file_id']) or {}
+    if current.get('status') == 'READY':
+        return True
+    try:
+        storage.s3().head_object(Bucket=storage.bucket(), Key=storage.object_key(item))
+        return True
+    except ClientError:
+        return False
+
+
 def finish_multipart(item):
     '''Combine the uploaded parts into the final object.'''
     s3 = storage.s3()
@@ -33,14 +45,21 @@ def finish_multipart(item):
             kwargs['PartNumberMarker'] = page['NextPartNumberMarker']
     except ClientError as error:
         if error.response.get('Error', {}).get('Code') == 'NoSuchUpload':
+            if already_completed(item):
+                return
             raise api.ApiError(410, 'This upload has expired. Start it again.') from None
         raise
     have = {p['PartNumber'] for p in parts}
     missing = [n for n in range(1, int(item['part_count']) + 1) if n not in have]
     if missing:
         raise api.ApiError(409, 'Some parts have not been uploaded yet', missing_parts=missing[:100])
-    s3.complete_multipart_upload(MultipartUpload={'Parts': sorted(parts, key=lambda p: p['PartNumber'])},
-                                 **{k: kwargs[k] for k in ('Bucket', 'Key', 'UploadId')})
+    try:
+        s3.complete_multipart_upload(MultipartUpload={'Parts': sorted(parts, key=lambda p: p['PartNumber'])},
+                                     **{k: kwargs[k] for k in ('Bucket', 'Key', 'UploadId')})
+    except ClientError as error:
+        if error.response.get('Error', {}).get('Code') == 'NoSuchUpload' and already_completed(item):
+            return
+        raise
 
 
 def discard(item):
@@ -57,6 +76,9 @@ def lambda_handler(event):
 
     if item.get('upload_id'):
         finish_multipart(item)
+        current = storage.get_file(item['file_id']) or {}
+        if current.get('status') == 'READY':   # a parallel call finished (and counted) it
+            return 200, {'file_id': item['file_id'], 'status': 'READY', 'size': int(current.get('size', 0))}
     try:
         size = int(storage.s3().head_object(Bucket=storage.bucket(),
                                             Key=storage.object_key(item))['ContentLength'])
