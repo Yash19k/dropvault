@@ -5,6 +5,7 @@ import { Spinner } from './components/ui';
 import Landing from './pages/Landing';
 import HowItWorks from './pages/HowItWorks';
 import DeployGuide from './pages/DeployGuide';
+import NotFound from './pages/NotFound';
 import Login from './pages/Login';
 import SignUp from './pages/SignUp';
 import DashboardLayout from './pages/dashboard/DashboardLayout';
@@ -67,7 +68,7 @@ export default function App() {
         <Route path="health" element={<RequireAdmin><AdminHealth /></RequireAdmin>} />
         <Route path="system" element={<RequireAdmin><AdminSystem /></RequireAdmin>} />
       </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<NotFound />} />
     </Routes>
   );
 }
