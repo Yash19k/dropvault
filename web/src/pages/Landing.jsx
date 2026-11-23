@@ -3,7 +3,7 @@ import { ArrowRight, Github, RotateCcw, ShieldCheck, Scale } from 'lucide-react'
 import { LogoMark } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { REPO_URL } from '../brand';
-import { EMAIL_SHARING } from '../lib/features';
+import { useFeatures } from '../lib/features';
 import HeroDemo from './landing/HeroDemo';
 import Features from './landing/Features';
 import ClockBand from './landing/ClockBand';
@@ -19,6 +19,7 @@ const PROOF = [
 
 export default function Landing() {
   const { isAuthenticated } = useAuth();
+  const { email_sharing: emailSharing } = useFeatures();
   usePageScroll();
   return (
     <div className="min-h-screen overflow-x-clip">
@@ -47,7 +48,7 @@ export default function Landing() {
               </h1>
 
               <p className="mt-7 max-w-lg text-lg leading-relaxed text-muted">
-                Upload big files, send them by {EMAIL_SHARING ? 'email, link' : 'link'} or QR code, and decide how long each link works and how many
+                Upload big files, send them by {emailSharing ? 'email, link' : 'link'} or QR code, and decide how long each link works and how many
                 downloads it gets. When it’s done, it’s gone.
               </p>
 

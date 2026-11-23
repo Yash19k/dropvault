@@ -1,6 +1,6 @@
 # Built-in simple auth service (email + password), served from the SAME API as
 # the file routes:  /v1/users (POST), /v1/login, /v1/userinfo, /v1/logout,
-# /v1/refresh-token, /v1/password (change password). File routes are protected by the Lambda authorizer
+# /v1/refresh-token, /v1/password (change password), /v1/features (public feature switches). File routes are protected by the Lambda authorizer
 # (authorizer.tf), which checks these tokens itself; pointing auth_endpoint at
 # an external service instead makes it ask that service's /v1/userinfo.
 
@@ -47,6 +47,10 @@ resource "aws_iam_role_policy" "auth_users" {
       Effect   = "Allow"
       Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"] # UpdateItem: logout revokes refresh tokens
       Resource = aws_dynamodb_table.users.arn
+      }, {
+      Effect   = "Allow"
+      Action   = ["ses:GetAccount"] # /v1/features: is SES out of the sandbox yet?
+      Resource = "*"
     }]
   })
 }
@@ -64,9 +68,10 @@ resource "aws_lambda_function" "auth" {
 
   environment {
     variables = merge(local.auth_limits_env, {
-      USERS_TABLE  = aws_dynamodb_table.users.name
-      TOKEN_SECRET = random_password.token_secret.result
-      ADMIN_EMAILS = join(",", var.admin_emails) # so sign-in can tell the web app who is an admin
+      USERS_TABLE   = aws_dynamodb_table.users.name
+      TOKEN_SECRET  = random_password.token_secret.result
+      ADMIN_EMAILS  = join(",", var.admin_emails) # so sign-in can tell the web app who is an admin
+      EMAIL_SHARING = var.email_sharing           # auto = on once SES leaves the sandbox
     })
   }
   depends_on = [aws_cloudwatch_log_group.auth]
@@ -79,7 +84,7 @@ resource "aws_cloudwatch_log_group" "auth" {
 
 # --- Resources under /v1 (/v1/users already exists in apigateway.tf) ---
 resource "aws_api_gateway_resource" "auth" {
-  for_each    = toset(["login", "userinfo", "logout", "refresh-token", "password"])
+  for_each    = toset(["login", "userinfo", "logout", "refresh-token", "password", "features"])
   rest_api_id = aws_api_gateway_rest_api.api.id
   parent_id   = aws_api_gateway_resource.v1.id
   path_part   = each.key
@@ -93,6 +98,7 @@ locals {
     logout   = { resource_id = aws_api_gateway_resource.auth["logout"].id, method = "POST" }
     refresh  = { resource_id = aws_api_gateway_resource.auth["refresh-token"].id, method = "POST" }
     password = { resource_id = aws_api_gateway_resource.auth["password"].id, method = "POST" }
+    features = { resource_id = aws_api_gateway_resource.auth["features"].id, method = "GET" }
   }
 }
 
@@ -115,6 +121,7 @@ module "cors_auth" {
     logout        = aws_api_gateway_resource.auth["logout"].id
     refresh-token = aws_api_gateway_resource.auth["refresh-token"].id
     password      = aws_api_gateway_resource.auth["password"].id
+    features      = aws_api_gateway_resource.auth["features"].id
   }
   source      = "./modules/cors-options"
   rest_api_id = aws_api_gateway_rest_api.api.id

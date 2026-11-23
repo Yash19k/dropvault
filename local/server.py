@@ -256,6 +256,7 @@ ROUTES = [
     ('POST', r'^/v1/logout$', AUTH, PUBLIC),
     ('POST', r'^/v1/password$', AUTH, PUBLIC),
     ('GET', r'^/v1/userinfo$', AUTH, PUBLIC),
+    ('GET', r'^/v1/features$', AUTH, PUBLIC),
     ('POST', r'^/v1/users/{0}/files$'.format(SEG), ('upload-file', 'upload_file'), PROTECTED),
     ('POST', r'^/v1/users/{0}/files/{0}/parts$'.format(SEG), ('upload-file', 'upload_file'), PROTECTED),
     ('GET', r'^/v1/users/{0}/files$'.format(SEG), ('get-user-files', 'get_user_files'), PROTECTED),

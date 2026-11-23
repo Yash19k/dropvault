@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Clock, Download, UploadCloud, Mail, QrCode, ShieldCheck, BarChart3, Infinity as InfinityIcon, Check } from 'lucide-react';
 import { LINK_EXPIRY, DOWNLOAD_LIMITS } from '../../api/filesApi';
 import { CHANNEL, LINK_STATUS } from '../../lib/meta';
-import { EMAIL_SHARING } from '../../lib/features';
+import { useFeatures } from '../../lib/features';
 import FakeQr from './FakeQr';
 import { Reveal, useInView, useInterval, useReducedMotion } from './motion';
 
@@ -10,6 +10,7 @@ import { Reveal, useInView, useInterval, useReducedMotion } from './motion';
 // the real feature rather than a stock icon.
 
 export default function Features() {
+  const { email_sharing: emailSharing } = useFeatures();
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <Card className="lg:col-span-2" icon={Clock} title="Links that expire on your schedule"
@@ -21,11 +22,11 @@ export default function Features() {
         <LimitDemo />
       </Card>
       {/* With the email card hidden, this one widens so the grid stays full. */}
-      <Card className={EMAIL_SHARING ? undefined : 'lg:col-span-2'} icon={UploadCloud} title="Big files, resumable"
+      <Card className={emailSharing ? undefined : 'lg:col-span-2'} icon={UploadCloud} title="Big files, resumable"
         text="Files go straight from your browser to S3. Anything over 100 MB goes up in parts, and you can resume after closing the tab.">
         <PartsDemo />
       </Card>
-      {EMAIL_SHARING && <Card delay={80} icon={Mail} title="Email a whole team"
+      {emailSharing && <Card delay={80} icon={Mail} title="Email a whole team"
         text="Send to several people at once. Everyone gets their own link, so you can tell who downloaded and who didn’t.">
         <EmailDemo />
       </Card>}

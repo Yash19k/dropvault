@@ -327,6 +327,38 @@ def owner_password(event):
     return {'email': email, 'temporary_password': password, 'created': created}
 
 
+# --- feature switches the web app reads at start-up (GET /v1/features) -------
+# Email sharing: "auto" (default) turns it on by itself once AWS takes SES out of
+# the sandbox, because before that mail only reaches verified addresses.
+# "on"/"off" force it. SES is asked at most every FEATURE_TTL seconds per
+# Lambda instance; if the check fails the last answer stands.
+FEATURE_TTL = 600
+SES_STATE = {'checked': 0.0, 'production': False}
+
+
+def ses_production():
+    now = time.time()
+    if now - SES_STATE['checked'] >= FEATURE_TTL:
+        try:
+            account = boto3.client('sesv2').get_account()
+            SES_STATE['production'] = bool(account.get('ProductionAccessEnabled'))
+        except Exception as error:  # pylint: disable=broad-except
+            print('SES account check failed: {0}'.format(error))
+        SES_STATE['checked'] = now
+    return SES_STATE['production']
+
+
+def email_sharing_enabled():
+    setting = (os.environ.get('EMAIL_SHARING') or 'auto').strip().lower()
+    if setting in ('on', 'off'):
+        return setting == 'on'
+    return ses_production()
+
+
+def features():
+    return respond(200, {'email_sharing': email_sharing_enabled()}, {'Cache-Control': 'public, max-age=300'})
+
+
 def lambda_handler(event, _context):
     event = event or {}
     if 'httpMethod' not in event and event.get('action') == 'owner_password':
@@ -354,6 +386,8 @@ def lambda_handler(event, _context):
             return logout(headers, body)
         if method == 'GET' and path.endswith('/v1/userinfo'):
             return userinfo(headers)
+        if method == 'GET' and path.endswith('/v1/features'):
+            return features()
         return respond(404, {'message': 'Not found'})
     except Exception as error:  # pylint: disable=broad-except
         print('auth error: {0}'.format(error))

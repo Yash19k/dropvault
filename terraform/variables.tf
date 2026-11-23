@@ -244,6 +244,16 @@ variable "max_pending_uploads" {
   default     = 50
 }
 
+variable "email_sharing" {
+  description = "Share by email in the web app: auto = appears by itself once AWS approves SES production access (sandbox mail only reaches verified addresses), on/off = force it"
+  type        = string
+  default     = "auto"
+  validation {
+    condition     = contains(["auto", "on", "off"], var.email_sharing)
+    error_message = "email_sharing must be auto, on or off."
+  }
+}
+
 variable "share_emails_per_day" {
   description = "Share emails one user may send per day (UTC). Protects the SES sender's reputation; the SES sandbox allows 200 a day in total"
   type        = number

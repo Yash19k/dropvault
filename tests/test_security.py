@@ -358,3 +358,45 @@ def test_quota_is_still_enforced_at_completion(aws, monkeypatch):
     upload_file(data=b'x' * 10)
     _, listed, _ = call('get-user-files', 'get_user_files', 'GET', '/v1/users/user-1/files')
     assert listed['usage'] == {'used_bytes': 10, 'quota_bytes': GB}
+
+
+class FakeSesAccount:
+    def __init__(self, production=False, fail=False):
+        self.production, self.fail, self.calls = production, fail, 0
+
+    def get_account(self):
+        self.calls += 1
+        if self.fail:
+            raise ClientError({'Error': {'Code': 'AccessDenied', 'Message': 'no'}}, 'GetAccount')
+        return {'ProductionAccessEnabled': self.production}
+
+
+def features_with(auth_service, monkeypatch, ses):
+    monkeypatch.setattr(auth_service.boto3, 'client', lambda name, **_: ses)
+    status, body, headers = auth_call('GET', '/v1/features')
+    assert status == 200 and 'max-age' in headers['Cache-Control']
+    return body['email_sharing']
+
+
+def test_email_sharing_turns_on_by_itself_once_ses_leaves_the_sandbox(auth_service, monkeypatch):
+    monkeypatch.delenv('EMAIL_SHARING', raising=False)
+    ses = FakeSesAccount(production=False)
+    assert features_with(auth_service, monkeypatch, ses) is False
+    ses.production = True
+    assert features_with(auth_service, monkeypatch, ses) is False   # cached for FEATURE_TTL
+    assert ses.calls == 1
+    auth_service.SES_STATE['checked'] = 0                           # the cache runs out
+    assert features_with(auth_service, monkeypatch, ses) is True
+    ses.fail = True                                                 # a failed check keeps the last answer
+    auth_service.SES_STATE['checked'] = 0
+    assert features_with(auth_service, monkeypatch, ses) is True
+
+
+def test_email_sharing_can_be_forced_on_or_off(auth_service, monkeypatch):
+    ses = FakeSesAccount(production=True)
+    monkeypatch.setenv('EMAIL_SHARING', 'off')
+    assert features_with(auth_service, monkeypatch, ses) is False
+    monkeypatch.setenv('EMAIL_SHARING', 'on')
+    ses.production = False
+    assert features_with(auth_service, monkeypatch, ses) is True
+    assert ses.calls == 0

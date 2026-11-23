@@ -397,8 +397,8 @@ Deployed.
         <Note title="The SES sandbox">
           <p>A new account can only send email to verified addresses, 200 a day. Request production access in the SES
             console to email anyone. Copy-link and QR sharing don’t use SES at all.</p>
-          <p>Share by email is currently switched off in the web app (<C>EMAIL_SHARING</C> in <C>web/src/lib/features.js</C>);
-            the SES setup is deployed either way.</p>
+          <p>Share by email appears in the web app by itself once AWS approves production access: the API checks SES
+            every few minutes. To force it on or off, set <C>email_sharing</C> in <C>terraform.tfvars</C>.</p>
         </Note>
         <Learn>
           <p>Both clicks are proof of consent. SES needs to know you own the From address before it sends as it, and SNS
