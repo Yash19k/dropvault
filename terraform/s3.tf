@@ -50,11 +50,8 @@ resource "aws_s3_bucket_cors_configuration" "files" {
   bucket = aws_s3_bucket.files.id
   cors_rule {
     allowed_methods = ["PUT", "GET"]
-    # the hosted web app (web.tf) is always allowed, plus its custom domain and any extra origins
-    allowed_origins = distinct(compact(concat(
-      [local.web_url, var.web_domain != "" ? "https://${var.web_domain}" : ""],
-      var.allowed_origins,
-    )))
+    # the hosted web app (web.tf) is always allowed, plus any extra origins
+    allowed_origins = concat([local.web_url], var.allowed_origins)
     allowed_headers = ["*"]
     expose_headers  = ["ETag"]
     max_age_seconds = 3000

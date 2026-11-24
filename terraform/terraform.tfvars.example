@@ -29,8 +29,6 @@ web_hosting = "amplify"
 # To rename it later and keep the old address working:
 # amplify_branch            = "dropvault"
 # amplify_redirect_branches = ["main"] # old branches whose addresses redirect to the app
-# Custom domain on Amplify; add the records from `terraform output web_domain_dns_records` at its DNS host.
-# web_domain = "dropvault.example.com"
 
 # --- Extra origins allowed to upload/download directly to S3 (the hosted app is always allowed)
 allowed_origins = ["http://localhost:3001"]

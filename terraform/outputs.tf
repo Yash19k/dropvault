@@ -75,11 +75,3 @@ output "auth_function" {
   description = "The auth Lambda; admin-account.sh invokes it directly to set up an owner admin's account"
   value       = aws_lambda_function.auth.function_name
 }
-
-output "web_domain_dns_records" {
-  description = "DNS records to add for var.web_domain: the certificate check and the site itself"
-  value = (local.use_amplify && var.web_domain != "" ? compact([
-    aws_amplify_domain_association.web[0].certificate_verification_dns_record,
-    one(aws_amplify_domain_association.web[0].sub_domain).dns_record,
-  ]) : [])
-}

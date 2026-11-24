@@ -135,12 +135,6 @@ variable "amplify_redirect_branches" {
   default     = []
 }
 
-variable "web_domain" {
-  description = "Custom domain for the web app on Amplify (e.g. dropvault.is-a.dev). Its DNS lives elsewhere: after apply, add the records from `terraform output web_domain_dns_records`. Empty = none."
-  type        = string
-  default     = ""
-}
-
 variable "api_throttle_rate" {
   description = "Steady-state requests per second allowed across the whole API stage"
   type        = number

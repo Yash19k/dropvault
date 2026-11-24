@@ -78,23 +78,6 @@ resource "aws_amplify_branch" "app" {
   stage       = "PRODUCTION"
 }
 
-# Custom domain (var.web_domain) served by the app branch. The domain's DNS is
-# not in Route 53, so Terraform doesn't wait for it: add the two records from
-# `terraform output web_domain_dns_records` at the DNS provider and Amplify
-# issues the certificate once it sees them.
-resource "aws_amplify_domain_association" "web" {
-  count                  = local.use_amplify && var.web_domain != "" ? 1 : 0
-  app_id                 = aws_amplify_app.web[0].id
-  domain_name            = var.web_domain
-  enable_auto_sub_domain = false
-  wait_for_verification  = false
-
-  sub_domain {
-    branch_name = aws_amplify_branch.app[0].branch_name
-    prefix      = ""
-  }
-}
-
 # Old branch addresses, kept so old links still work: deploy.sh publishes a
 # small page to each that sends visitors to the same path on the app's address.
 resource "aws_amplify_branch" "redirect" {
