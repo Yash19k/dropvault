@@ -117,10 +117,11 @@ def presigned_download(item, expires_in):
         ExpiresIn=expires_in)
 
 
-# Types the browser may render as-is in a preview. Anything else is served as
-# plain text, so an uploaded HTML or SVG page can never run as a web page.
+# Types the browser may render as-is in a preview. SVG is deliberately NOT
+# here: it can carry <script> that runs when the browser renders it inline, so
+# it (like HTML) is served as plain text instead and can never run as a page.
 PREVIEW_TYPES = {
-    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp', 'image/svg+xml',
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp',
     'image/x-icon', 'image/vnd.microsoft.icon',
     'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime', 'video/x-matroska', 'video/x-m4v',
     'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/ogg', 'audio/webm',
