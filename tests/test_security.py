@@ -81,6 +81,18 @@ def test_wrong_passwords_lock_the_account_for_a_while(auth_service, monkeypatch)
     assert login('bob@example.com')[0] == 200
 
 
+def test_one_network_cant_lock_an_account_out_for_everyone(auth_service, monkeypatch):
+    '''Wrong-password lockout is scoped per (account, network): an attacker
+       flooding one account's sign-in from their own IP throttles only that
+       network, never the real owner signing in from a different one.'''
+    monkeypatch.setenv('LOGIN_FAILURES', '3')
+    sign_up()
+    for _ in range(3):
+        assert login(password='wrong-password', ip='203.0.113.7')[0] == 401
+    assert login(ip='203.0.113.7')[0] == 429            # the attacker's network is throttled
+    assert login(ip='198.51.100.1')[0] == 200           # the owner's network still works
+
+
 def test_failed_sign_ins_count_for_unknown_addresses_too(auth_service, monkeypatch):
     '''Otherwise the 429 would reveal which addresses have accounts.'''
     monkeypatch.setenv('LOGIN_FAILURES', '2')

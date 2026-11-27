@@ -15,7 +15,9 @@ Routes (API Gateway REST, Lambda proxy):
 
 Rate limits (ratelimit.py in the shared layer, all configurable):
   sign-in      LOGIN_PER_IP attempts per IP and LOGIN_FAILURES wrong passwords
-               per account, per 15 minutes (429 + Retry-After after that)
+               per (account, network), per 15 minutes (429 + Retry-After after
+               that) - scoped per network so one network can't lock an account
+               out for its real owner elsewhere
   sign-up      SIGNUPS_PER_IP per IP per hour
   password     wrong current passwords count as failed sign-ins
 
@@ -185,10 +187,19 @@ def count_failure(fail_key):
         pass
 
 
+def fail_subject(email, ip):
+    '''Wrong-password counter scoped to (account, caller network). A single
+       network still can't brute-force an account (LOGIN_FAILURES tries, then
+       429), but - unlike an account-wide lock - it can no longer lock the real
+       owner out from a different network (targeted-lockout DoS). A single IP's
+       total damage across accounts is still bounded by the login-ip limit.'''
+    return ratelimit.subject('login-fail', '{0}|{1}'.format(email or '', ip or ''))
+
+
 def login(body, event):
     email = text(body, 'email').strip().lower()
     password = text(body, 'password')[:MAX_PASSWORD]
-    fail_key = ratelimit.subject('login-fail', email)
+    fail_key = fail_subject(email, ratelimit.source_ip(event))
     try:
         ratelimit.hit(ratelimit.subject('login-ip', ratelimit.source_ip(event)), login_per_ip(), WINDOW)
     except ratelimit.Limited as limited:
@@ -198,8 +209,8 @@ def login(body, event):
         # answer doesn't reveal which addresses have accounts.
         ratelimit.check(fail_key, login_failures(), WINDOW)
     except ratelimit.Limited as limited:
-        return too_many(limited, 'Too many wrong passwords for this account. Try again in {0}, '
-                                 'or ask an administrator to reset your password.')
+        return too_many(limited, 'Too many wrong passwords for this account from this network. '
+                                 'Try again in {0}.')
     user = None
     if email and len(email) <= MAX_EMAIL:
         user = TABLE.get_item(Key={'email': email}).get('Item')
@@ -272,13 +283,13 @@ def userinfo(headers):
                          'email': claims['email']})
 
 
-def change_password(headers, body):
+def change_password(headers, body, ip):
     '''The caller sets a new password. Every other session ends; this one
        gets fresh tokens so it stays signed in.'''
     claims, user = current_user(headers)
     if not claims:
         return respond(401, {'message': 'Unauthorized'})
-    fail_key = ratelimit.subject('login-fail', user['email'])
+    fail_key = fail_subject(user['email'], ip)
     try:
         ratelimit.check(fail_key, login_failures(), WINDOW)
     except ratelimit.Limited as limited:
@@ -322,7 +333,6 @@ def owner_password(event):
                                            'REMOVE suspended_at ADD token_version :one',
                           ExpressionAttributeValues={':p': hash_password(password), ':now': now, ':one': 1})
         created = False
-    ratelimit.clear(ratelimit.subject('login-fail', email), WINDOW)
     print('owner account {0}: {1}'.format('created' if created else 'password reset', email))
     return {'email': email, 'temporary_password': password, 'created': created}
 
@@ -379,7 +389,7 @@ def lambda_handler(event, _context):
         if method == 'POST' and path.endswith('/v1/login'):
             return login(body, event)
         if method == 'POST' and path.endswith('/v1/password'):
-            return change_password(headers, body)
+            return change_password(headers, body, ratelimit.source_ip(event))
         if method == 'POST' and path.endswith('/v1/refresh-token'):
             return refresh(body)
         if method == 'POST' and path.endswith('/v1/logout'):
